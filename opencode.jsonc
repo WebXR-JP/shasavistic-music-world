@@ -1,0 +1,64 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 共通権限とモデル割当てはここ、役割固有の権限と指示は .opencode/agents/ で管理する。
+  // 既存 opencode.jsonc がある場合はフルファイルで上書きしない。キーと配列要素だけ足す。接合規約の正本は template-catalog.md による。
+  // MCPの定義とMCP向け権限はMCP構成の断片で mcp セクションと権限項目として追加する。
+  "default_agent": "orchestrator",
+  "model": "opencode-go/muse-spark-1.3-contributor",
+  "agents": {
+    "orchestrator": { "model": "opencode-go/deepseek-v4.1-flash#high" },
+    "advisor": { "model": "openai/gpt-6-sol#high" },
+    "builder": { "model": "opencode-go/muse-spark-1.3-contributor#xhigh" },
+    "committer": { "model": "opencode-go/muse-spark-1.3-contributor#high" }
+  },
+  "permissions": [
+    // gitは既定で拒否し、読み取り系だけ許可する。
+    {
+      "action": "shell",
+      "resource": "git *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git status *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git diff *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git log *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git show *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git rev-parse *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git rev-list *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git ls-files *",
+      "effect": "allow"
+    },
+    // コミット用スクリプトはcommitterだけが使う。orchestrator側でも拒否する。
+    {
+      "action": "shell",
+      "resource": "node .opencode/scripts/commit-change.mjs *",
+      "effect": "deny"
+    }
+    // MCP向け権限はここに置かない。正本はMCP構成の断片による。
+  ]
+}

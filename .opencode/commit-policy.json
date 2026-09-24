@@ -1,0 +1,14 @@
+{
+  "_comment": {
+    "protectedBranches": "保護ブランチの一覧。例示として [\"main\", \"master\"] の形で導入時に決める。該当ブランチへのコミットは --allow-protected-branch が必要。",
+    "protectedPaths": "保護パスの一覧。形式は [{\"id\": \"...\", \"path\": \"...\"}] で、id は CLI の --allow-protected-path <id> に使う。導入時に決める。ゼロ件でもよい。",
+    "forbiddenPathSegments": "禁止パス断片の一覧。パス区切り単位で一致したら拒否する。例示として [\"tmp\"] の形で導入時に決める。",
+    "subjectMaxCharacters": "件名の上限文字数。例示として 80 の形で導入時に決める。",
+    "messageHeadings": "コミットメッセージの見出し語。形式は {\"summary\": \"概要\", \"verification\": \"検証\", \"reference\": \"参照\"} の形で導入時に決める。"
+  },
+  "protectedBranches": ["main"],
+  "protectedPaths": [],
+  "forbiddenPathSegments": ["tmp"],
+  "subjectMaxCharacters": 80,
+  "messageHeadings": { "summary": "概要", "verification": "検証", "reference": "参照" }
+}
