@@ -1,0 +1,56 @@
+{
+  "schema": "host-confirmation/v1",
+  "environmentKind": "host",
+  "published": {
+    "worldId": "",
+    "build": "",
+    "uploadedAt": ""
+  },
+  "instance": {
+    "instanceId": "",
+    "instanceUrl": "https://app.xrift.net/instance/<instanceId>",
+    "joinedAt": "",
+    "joinMethod": ""
+  },
+  "observedAt": "",
+  "client": {
+    "browser": "",
+    "device": "",
+    "outputDevice": "",
+    "volume": "",
+    "tabMuted": false,
+    "joinState": ""
+  },
+  "silenceControl": {
+    "checked": false,
+    "note": ""
+  },
+  "operation": [
+    {
+      "at": "",
+      "action": "single-sustain | single-noteoff | next-chord | chord-stop",
+      "target": "",
+      "note": ""
+    }
+  ],
+  "capture": {
+    "attempted": false,
+    "source": "",
+    "identified": false,
+    "result": "obtained | target-unidentified | not-attempted",
+    "measurements": {},
+    "note": ""
+  },
+  "listening": {
+    "sameConditions": false,
+    "items": {
+      "heardAfterOperation": "pass | fail | unobserved",
+      "sustainReleaseSilence": "pass | fail | unobserved",
+      "singleVsChord": "pass | fail | unobserved",
+      "noCrackleOrDiscomfort": "pass | fail | unobserved"
+    },
+    "note": ""
+  },
+  "unobserved": [""],
+  "memo": ""
+}
