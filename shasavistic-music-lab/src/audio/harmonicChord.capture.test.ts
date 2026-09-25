@@ -596,8 +596,13 @@ async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<Envel
   const releaseMidRms = rmsOf();
   let stoppedRms = rmsOf();
   let stopPolls = 0;
+  // 消音の標本と終了通知の到達を同じ期限で待つ。標本だけが先に消えても
+  // 終了通知の到達前には声の状態が残るため、両方の到達を確かめる。
   while (
-    (stoppedRms >= input.stoppedRmsMax || stoppedRms >= sustainMean * input.stoppedRmsRatioMax) &&
+    (stoppedRms >= input.stoppedRmsMax ||
+      stoppedRms >= sustainMean * input.stoppedRmsRatioMax ||
+      session.playing ||
+      session.releasing) &&
     stopPolls * input.pollIntervalMs < input.stopTimeoutMs
   ) {
     await sleep(input.pollIntervalMs);
