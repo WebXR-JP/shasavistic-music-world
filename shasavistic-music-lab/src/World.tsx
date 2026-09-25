@@ -4,7 +4,6 @@ import { useRef } from 'react'
 import { Mesh } from 'three'
 import { Skybox } from './components/Skybox'
 import { HarmonicSwitch } from './components/HarmonicSwitch'
-import { ToneSwitch } from './components/ToneSwitch'
 import { COLORS, WORLD_CONFIG } from './constants'
 
 export interface WorldProps {
@@ -74,10 +73,7 @@ export const World: React.FC<WorldProps> = ({ position = [0, 0, 0], scale = 1 })
         <SpawnPoint />
       </group>
 
-      {/* ========== 単音の操作口（回帰対象として残す） ========== */}
-      <ToneSwitch position={[0, 1.5, 6]} />
-
-      {/* ========== 調波単音の操作口（プリセット聴き比べ） ========== */}
+      {/* ========== 調波シンセの操作口（音色と比率集合の聴き比べ） ========== */}
       <HarmonicSwitch position={[1.5, 1.5, 6]} />
     </group>
   )

@@ -10,7 +10,7 @@
  * 採取口は検査が用意する足場であり、ワールドの実行時挙動は変えない。
  *
  * 照準は利用者と同じ手段（`D` キーによる右移動と中央照準の命中表示）で行い、
- * 命中対象の取違いは音の成分（正弦の旧口にはない倍音と五度の声）で検出する。
+ * 対象の正しさは音の成分（狙った倍音と五度の声）で検出する。
  *
  * 覆う層：実操作経路から演奏口・実音声グラフへの信号生成（開発環境のブラウザ内）。
  * 覆わない層：ホスト環境の操作・許可・聴き分けと物理出力。物理出力の証明には
@@ -215,7 +215,7 @@ const ABSENT_DROP_DB_MIN = 30;
 /** 一操作目の単声の基音（Hz）。聴き比べ列の先頭に対応する。 */
 const SINGLE_BASE_HZ = 440;
 
-/** 一操作目の単声に現れる倍音（Hz）。正弦の旧口との区別に使う。 */
+/** 一操作目の単声に現れる倍音（Hz）。調波であることの証拠に使う。 */
 const SINGLE_HARMONIC_HZ = 880;
 
 /** 二和音目の第二声の基音（Hz）。単声の倍音列に現れない。 */
@@ -257,7 +257,6 @@ async function launchInteractBrowser(): Promise<{
 interface InteractOperationLog {
   readonly initialHit: boolean;
   readonly strafeBursts: number;
-  readonly sawGap: boolean;
   readonly aimedHit: boolean;
   readonly clickTrusted: boolean[];
 }
@@ -291,13 +290,14 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await page.goto(devUrl, { waitUntil: 'load', timeout: 60000 });
           await page.waitForSelector('canvas', { timeout: 60000 });
 
-          // 生成直後は旧口が正面にあり、中央照準が当たる。描画と物理の立上がりを待つ。
+          // 操作口は一つだけであり、生成直後の中央照準の当たり外れを記録する。
+          // 中央照準の表示が出るまで待つのは描画の立上がりのためであり合否ではない。
           let initialHit = false;
           const aimStart = Date.now();
           while (Date.now() - aimStart < AIM_TIMEOUT_MS) {
             const hit = await page.evaluate(() => window.__crosshairActive());
-            if (hit === true) {
-              initialHit = true;
+            if (hit !== null) {
+              initialHit = hit;
               break;
             }
             await sleep(POLL_INTERVAL_MS);
@@ -306,12 +306,11 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           // 操作前は音声文脈を作らない。遅延生成の確認であり、無操作時との差の起点にする。
           const baselineContexts = await page.evaluate(() => window.__contextCount());
 
-          // 右へ刻み移動し、旧口を外して新口に当てる。命中表示の「有→無→有」で
-          // 新口への到達とみなし、音の成分で対象の取違いを検出する。
-          let sawGap = false;
-          let aimedHit = false;
+          // 外れていれば右へ刻み移動して当てる。当たれば到達とみなし、
+          // 音の成分で対象の正しさを検出する。
+          let aimedHit = initialHit;
           let strafeBursts = 0;
-          if (initialHit) {
+          if (!aimedHit) {
             for (let burst = 0; burst < STRAFE_MAX_BURSTS; burst += 1) {
               await page.keyboard.down('d');
               await sleep(STRAFE_BURST_MS);
@@ -319,18 +318,15 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
               await sleep(STRAFE_SETTLE_MS);
               strafeBursts += 1;
               const hit = await page.evaluate(() => window.__crosshairActive());
-              if (hit === false) {
-                sawGap = true;
-              }
-              if (hit === true && sawGap) {
+              if (hit === true) {
                 aimedHit = true;
                 break;
               }
             }
-            await sleep(500);
-            const settledHit = await page.evaluate(() => window.__crosshairActive());
-            aimedHit = aimedHit && settledHit === true;
           }
+          await sleep(500);
+          const settledHit = await page.evaluate(() => window.__crosshairActive());
+          aimedHit = aimedHit && settledHit === true;
 
           // 一操作目（単声）。中央への信頼済み押下で操作口を駆動する。
           // 信頼済みかどうかの記録は最後にまとめて読む。
@@ -421,7 +417,6 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           const operationLog: InteractOperationLog = {
             initialHit,
             strafeBursts,
-            sawGap,
             aimedHit,
             clickTrusted,
           };
@@ -486,8 +481,8 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await page.close();
 
           // 操作前は無音（文脈なし）であり、操作起点で文脈が生まれること。
+          // 生成直後の当たり外れは記録だけし、到達の合否は移動後の照準で判定する。
           expect(baselineContexts).toBe(BASELINE_CONTEXT_COUNT);
-          expect(initialHit).toBe(true);
           expect(aimedHit).toBe(true);
           // 全操作が信頼済み入力であり、文脈は操作由来の再開で動くこと。
           expect(clickTrusted.length).toBeGreaterThanOrEqual(4);
@@ -497,7 +492,7 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           expect(contextStatesAfterFirst).toContain('running');
           // 一操作目の単声：非無音かつ過大でなく、狙った成分を持つこと。
           // 第二声の基音が底に落ちることで単声であること、倍音があることで
-          // 正弦の旧口ではなく新口の操作であること。
+          // 調波の操作であること。
           expect(toneRms).toBeGreaterThan(TONE_RMS_MIN);
           expect(toneRms).toBeLessThan(TONE_RMS_MAX);
           expect(tonePeak).toBeLessThan(TONE_PEAK_MAX);
@@ -514,8 +509,12 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           expect(restrikeRms).toBeLessThan(releaseFirstRms);
           expect(releaseMidRms).toBeLessThan(restrikeRms);
           // 即時切断では途中も消音と同じになるため、途中が消音を上回ることで
-          // 減衰の予約であることを確かめる。
-          expect(releaseMidRms).toBeGreaterThan(stoppedRms);
+          // 減衰の予約であることを確かめる。比較する途中点は再操作直後の読み
+          // （ノートオフから固定待ち合計で約150ミリ秒後）とする。減衰時間
+          // （0.3秒）の内側に収まるため、即時切断であれば採取窓が無音で満た
+          // されて消音と同値になり予約と区別できる。終端側の読みは操作と採取
+          // の遅れで無音窓になり消音と同値になりうるため、この比較には使わない。
+          expect(restrikeRms).toBeGreaterThan(stoppedRms);
           expect(stoppedRms).toBeLessThan(STOPPED_RMS_MAX);
           expect(stoppedRms).toBeLessThan(sustainMean * STOPPED_RMS_RATIO_MAX);
           // 減衰完了後の再操作で次の和音（五度）へ進むこと。

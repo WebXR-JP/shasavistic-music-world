@@ -962,7 +962,7 @@ describe('調波単音の非同期の競合と失敗', () => {
     ]);
   });
 
-  it('再開待ち中のノートオフで減衰を予約し旧処理が後続の声を止めない', async () => {
+  it('再開待ち中のノートオフで減衰を予約し旧声の終了通知が後続の声を止めない', async () => {
     const harness = createHarness();
     let release!: () => void;
     harness.enqueueResume(

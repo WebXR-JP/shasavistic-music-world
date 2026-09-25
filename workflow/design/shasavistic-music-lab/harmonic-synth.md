@@ -16,11 +16,11 @@
 
 段階は調波スペクトル単音、声ごとのエンベロープ、複数声・比率同時発音の順に足す。各段を個別の受入れ単位として判定する。音の終了は即時切断とせず、note-off を受けて減衰を鳴らし切り、停止と解放を区別する。
 
-置き方は既存の単音処理 `src/audio/singleTone.ts` とその検査を移行中の回帰対象として残す。新能力の音声処理はワールド内音声置場の別の演奏口として構成する。スペクトル係数計算と文脈・声・資源の寿命管理を分離する。旧口と新口は並置して移行中であり、後継の利用経路が判定できたら旧口とその専用検査を整理する。和音の実装・受入れと旧機能の撤去は別々に取り消せる変更として扱う。配置は `World.tsx`、操作部品は起動と表示、音声側は発音・停止・解放という親の分担を保つ。将来用の共通シンセ基盤や常設診断口は作らない。
+置き方は調波の演奏口をワールド内音声置場の一本の利用経路として構成する。スペクトル係数計算と文脈・声・資源の寿命管理を分離する。音声文脈は操作を起点に生成・再開し、操作口の存続中は保持し、破棄時に閉じる。配置は `World.tsx`、操作部品は起動と表示、音声側は発音・停止・解放という親の分担を保つ。将来用の共通シンセ基盤や常設診断口は作らない。
 
 ## 検証との接続
 
-方針のみを定め、合否値・入力例・境界値は検証側へ置く。既存の配線検査と実 Chrome 採取を伸ばす。係数計算は次数・重み・上限・位相・周波数上限を `shasavistic-music-lab/src/audio/harmonicSpectrum.test.ts` で単体判定、配線は声ごとの生成・同一文脈・note-off と減衰と解放・連打と再開失敗と破棄の競合を `shasavistic-music-lab/src/audio/harmonicTone.test.ts` で判定、実 Chrome 採取は必要成分と除外成分・エンベロープ時系列・複数基音と比率・停止後の消音・過大振幅を `shasavistic-music-lab/src/audio/harmonicTone.capture.test.ts` で判定する。分割後は採取検査が実コードの依存を含めて読み込むよう更新が要る。採取は信号生成の証明であり、操作起点・ホスト・物理出力の証明にはならない。実行形で判定できない実操作起点・ホストの許可と再開・物理出力だけを `workflow/spec/harmonic-synth-capture.md` の一時計画に置き、既存計画と重複させない。検証入口の順序はワールドのガイドによる。
+方針のみを定め、合否値・入力例・境界値は検証側へ置く。既存の配線検査と実 Chrome 採取を伸ばす。係数計算は次数・重み・上限・位相・周波数上限を `shasavistic-music-lab/src/audio/harmonicSpectrum.test.ts` で単体判定、配線は声ごとの生成・同一文脈・note-off と減衰と解放・連打と再開失敗と破棄の競合を `shasavistic-music-lab/src/audio/harmonicTone.test.ts` で判定、実 Chrome 採取は必要成分と除外成分・エンベロープ時系列・複数基音と比率・停止後の消音・過大振幅を `shasavistic-music-lab/src/audio/harmonicTone.capture.test.ts` で判定する。分割後は採取検査が実コードの依存を含めて読み込むよう更新が要る。採取は信号生成の証明であり、操作起点・ホスト・物理出力の証明にはならない。実行形で判定できない実操作起点・ホストの許可と再開・物理出力だけを `workflow/spec/harmonic-synth-capture.md` の一時計画に置く。検証入口の順序はワールドのガイドによる。
 
 ## 未確定の候補
 
@@ -30,22 +30,17 @@ Tone.js の採用は保留とし、Chrome での成分再現と音質、ホス�
 
 Chrome で係数どおりの成分や許容できる音質が得られない場合、ホストで再開できない場合、実測の負荷や同梱サイズが問題になる場合は、原因の証拠を付けて係数上限・方式・ライブラリ採用を再相談する。音色の許容範囲は設けず、測定値に基づく判定に任せる。ホスト音声許可と操作起点再開、XRift 上の音質と性能、同梱サイズは未測定とする。
 
-## 旧単音文書との関係
-
-`single-tone.md` の試料再生部品や作曲用ライブラリを要しないとする判断は、旧単音の暫定判断であり、本設計を拘束しない。本設計のために旧文書は変更しない。
-
 ## 確認済み事実
 
 一次資料の本文確認済み事項として、Web Audio API 仕様の発振器ノードと周期波の係数・正規化と折返し防止の実装裁量、Tone.js 該当版ソースの部分音指定・振幅エンベロープ・複数声シンセを記録する。実環境での動作・サイズ・ホスト互換は未確認とする。根拠資料の候補は決定の正本としない。
 
 ## 参照
 
-判断の正本はこの一枚に置き、親・姉妹・根拠資料へ結論を複製しない。親の分担と境界、姉妹の暫定方式、根拠資料の初期範囲、既存採取計画、運用規則は参照する。
+判断の正本はこの一枚に置き、親・子・根拠資料へ結論を複製しない。親の分担と境界、子の方式、根拠資料の初期範囲、一時計画、運用規則は参照する。
 
 - workflow/design/shasavistic-music-lab.md
-- workflow/design/shasavistic-music-lab/single-tone.md
 - workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとのエンベロープの方式）
 - workflow/design/shasavistic-music-lab/harmonic-synth/polyphony.md（複数声・比率同時発音の方式）
 - research/シャサフ式音楽向けシンセサイザー 基本波形設計案.md（候補・根拠。決定の正本にしない）
-- workflow/spec/single-tone-capture.md
+- workflow/spec/harmonic-synth-capture.md
 - shasavistic-music-lab/AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md

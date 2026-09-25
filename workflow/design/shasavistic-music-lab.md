@@ -1,6 +1,6 @@
 # Shasavistic Music Lab のワールド設計
 
-この文書は、表示名・配置・目的・作成入口・境界・責務分担を決める。今回の1音の満たし方は決めず、子を参照する。
+この文書は、表示名・配置・目的・作成入口・境界・責務分担を決める。調波シンセの満たし方は決めず、子を参照する。
 
 ## 要求元
 
@@ -54,6 +54,6 @@
 
 初回能力の満たし方は子を参照する。運用規則は上位文書による。
 
-- workflow/design/shasavistic-music-lab/single-tone.md
+- workflow/design/shasavistic-music-lab/harmonic-synth.md
 - research/xrift-world-creation.md
 - AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md、workflow/spec/AGENTS.md
