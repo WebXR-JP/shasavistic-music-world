@@ -8,8 +8,9 @@
   "agents": {
     "orchestrator": { "model": "opencode-go/deepseek-v4.1-flash#high" },
     "advisor": { "model": "openai/gpt-6-sol#high" },
-    "builder": { "model": "opencode-go/muse-spark-1.3-contributor#xhigh" },
-    "committer": { "model": "opencode-go/muse-spark-1.3-contributor#high" }
+    "builder": { "model": "opencode-go/muse-spark-1.3-contributor#high" },
+    "committer": { "model": "opencode-go/muse-spark-1.3-contributor#high" },
+    "design-reviewer": { "model": "opencode-go/muse-spark-1.3-contributor#xhigh" }
   },
   "permissions": [
     // gitは既定で拒否し、読み取り系だけ許可する。
