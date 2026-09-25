@@ -44,6 +44,7 @@ Chrome で係数どおりの成分や許容できる音質が得られない場�
 
 - workflow/design/shasavistic-music-lab.md
 - workflow/design/shasavistic-music-lab/single-tone.md
+- workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとのエンベロープの方式）
 - research/シャサフ式音楽向けシンセサイザー 基本波形設計案.md（候補・根拠。決定の正本にしない）
 - workflow/spec/single-tone-capture.md
 - shasavistic-music-lab/AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md

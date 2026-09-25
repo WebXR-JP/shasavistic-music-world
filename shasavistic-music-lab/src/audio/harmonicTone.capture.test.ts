@@ -1,11 +1,13 @@
 /**
- * 実ブラウザの音声グラフから採取した標本による調波単音生成の判定。
+ * 実ブラウザの音声グラフから採取した標本による調波単音生成と包絡の判定。
  *
  * 配線検査（`harmonicTone.test.ts`）では代替物で呼び出しの有無だけを確かめるため、
  * 本物の `AudioContext` が係数どおりの信号を生成しているかは分からない。この検査は
- * 実ブラウザで `createHarmonicToneSession` の実コードを依存（係数計算・プリセット）
- * ごと動かし、発振器の出力にだけ触れる採取口（`AnalyserNode`）で無操作時との差・
+ * 実ブラウザで `createHarmonicToneSession` の実コードを依存（係数計算・プリセット・
+ * 包絡）ごと動かし、発振器の出力にだけ触れる採取口（`AnalyserNode`）で無操作時との差・
  * 非無音・必要成分と除外成分・停止後の消音・過大振幅の有無を機械判定する。
+ * 包絡の検査では時系列に広げ、立ち上がり・減衰・持続・消音への推移と途中ノートオフ時の
+ * 接続を音声標本で判定する。
  * 採取口は検査が用意する足場であり、ワールドの実行時挙動は変えない。
  *
  * 覆う層：演奏口から実音声グラフへの信号生成（ブラウザ内の Web Audio）。
@@ -30,8 +32,14 @@ const CAPTURE_BROWSER_ARGS = ['--autoplay-policy=no-user-gesture-required', '--m
 /** 採取口の周波数分解能を決める窓の大きさ。 */
 const CAPTURE_FFT_SIZE = 16384;
 
+/** 包絡の時系列を追う窓の大きさ。時間分解能を優先して小さく取る。 */
+const ENVELOPE_FFT_SIZE = 4096;
+
 /** 信号の出現・消失を確かめる間隔（ミリ秒）。 */
 const CAPTURE_POLL_INTERVAL_MS = 100;
+
+/** 包絡の時系列を追う間隔（ミリ秒）。 */
+const ENVELOPE_SAMPLE_INTERVAL_MS = 50;
 
 /** 開始後の信号の出現を待つ上限（ミリ秒）。描画の遅れを吸収するための待ちであり合否ではない。 */
 const TONE_TIMEOUT_MS = 6000;
@@ -57,6 +65,24 @@ const TONE_RMS_MIN = 0.05;
 /** 発音中に許す実効値の上限。固定ゲインで抑えることを保証する。 */
 const TONE_RMS_MAX = 0.4;
 
+/** 持続中に求める実効値の下限。最大からの減衰後も可聴であること。 */
+const SUSTAIN_RMS_MIN = 0.03;
+
+/** 立ち上がりの途上が持続平均を下回る割合。無音からの上昇を示すこと。 */
+const ATTACK_EARLY_RATIO_MAX = 0.85;
+
+/** 頂上が持続平均を上回る割合。減衰前の到達を示すこと。 */
+const ENVELOPE_PEAK_RATIO_MIN = 1.03;
+
+/** 持続の標本が平均から外れてよい割合。安定していること。 */
+const SUSTAIN_DEVIATION_RATIO_MAX = 0.4;
+
+/** 減衰直後の実効値が持続平均を上回ってよい割合。跳ね上がりがないこと。 */
+const RELEASE_FIRST_RATIO_MAX = 1.15;
+
+/** 減衰直後の実効値が持続平均を下回ってよい下限。即時切断でないこと。 */
+const RELEASE_FIRST_RATIO_MIN = 0.25;
+
 /** 時系列の頂上に許す上限（絶対値）。1 を下回り過大振幅でないことを保証する。 */
 const TONE_PEAK_MAX = 0.99;
 
@@ -66,8 +92,16 @@ const STOPPED_RMS_MAX = 0.05;
 /** 停止後に許す実効値の上限（発音中の実効値に対する割合）。 */
 const STOPPED_RMS_RATIO_MAX = 0.1;
 
-/** 必要成分として認める水準の下限（dBFS）。無信号の底より十分に上であること。 */
-const PRESENT_DB_MIN = -60;
+/** 途中ノートオフ直後の窓に許す最大の段差（絶対値）。粗い不連続がないこと。 */
+const NOTE_OFF_JUMP_MAX = 0.4;
+
+/**
+ * 必要成分として認める水準の下限（dBFS）。無信号の底より十分に上であること。
+ *
+ * 持続利得は最大利得の0.7倍（約-3dB）のため、最大基準の-60から測定の余裕を
+ * 含めて3dB下げている。除外成分の底（-150dBFS付近）とは90dB以上の差がある。
+ */
+const PRESENT_DB_MIN = -64;
 
 /** 除外成分に許す水準の上限（絶対値、dBFS）。 */
 const ABSENT_DB_MAX = -85;
@@ -93,6 +127,40 @@ interface CaptureMeasurements {
   readonly stopPolls: number;
 }
 
+/** 包絡の時系列として採取した標本。合否の判定は検査側で行い、ここには置かない。 */
+interface EnvelopeMeasurements {
+  readonly sampleRate: number;
+  readonly contextState: string;
+  readonly earlyRms: number;
+  readonly peakRms: number;
+  readonly sustainMean: number;
+  readonly sustainMaxDeviation: number;
+  readonly releaseFirstRms: number;
+  readonly releaseMidRms: number;
+  readonly stoppedRms: number;
+  readonly stopSettled: boolean;
+  readonly stopPolls: number;
+  readonly playingAfterRelease: boolean;
+  readonly releasingAfterRelease: boolean;
+}
+
+/** 途中ノートオフとして採取した標本。合否の判定は検査側で行い、ここには置かない。 */
+interface MidNoteOffMeasurements {
+  readonly sampleRate: number;
+  readonly contextState: string;
+  readonly baselineRms: number;
+  readonly preRms: number;
+  readonly preJump: number;
+  readonly postJump: number;
+  readonly postRms: number;
+  readonly midRms: number;
+  readonly stoppedRms: number;
+  readonly stopSettled: boolean;
+  readonly stopPolls: number;
+  readonly playingAfterRelease: boolean;
+  readonly releasingAfterRelease: boolean;
+}
+
 /** ブラウザへ渡す入力。採取条件は検査側の正本から一つだけ渡す。 */
 interface CaptureInput {
   readonly moduleCode: string;
@@ -109,6 +177,34 @@ interface CaptureInput {
   readonly searchBins: number;
 }
 
+/** 包絡の採取でブラウザへ渡す入力。採取条件は検査側の正本から一つだけ渡す。 */
+interface EnvelopeCaptureInput {
+  readonly moduleCode: string;
+  readonly preset: HarmonicPreset;
+  readonly frequency: number;
+  readonly fftSize: number;
+  readonly sampleIntervalMs: number;
+  readonly seriesSamples: number;
+  readonly pollIntervalMs: number;
+  readonly stopTimeoutMs: number;
+  readonly stoppedRmsMax: number;
+  readonly stoppedRmsRatioMax: number;
+}
+
+/** 途中ノートオフの採取でブラウザへ渡す入力。採取条件は検査側の正本から一つだけ渡す。 */
+interface MidNoteOffCaptureInput {
+  readonly moduleCode: string;
+  readonly preset: HarmonicPreset;
+  readonly frequency: number;
+  readonly fftSize: number;
+  readonly noteOffDelayMs: number;
+  readonly midDelayMs: number;
+  readonly pollIntervalMs: number;
+  readonly stopTimeoutMs: number;
+  readonly stoppedRmsMax: number;
+  readonly stoppedRmsRatioMax: number;
+}
+
 /**
  * 実コードとその依存を一つの実行単位に束ねる。
  *
@@ -120,8 +216,8 @@ interface CaptureInput {
  */
 async function loadHarmonicModuleCode(): Promise<string> {
   const sources = await Promise.all(
-    ['./harmonicSpectrum.ts', './harmonicPresets.ts', './harmonicTone.ts'].map((name) =>
-      readFile(new URL(name, import.meta.url), 'utf8'),
+    ['./harmonicSpectrum.ts', './harmonicPresets.ts', './harmonicEnvelope.ts', './harmonicTone.ts'].map(
+      (name) => readFile(new URL(name, import.meta.url), 'utf8'),
     ),
   );
   const modules = sources.map(
@@ -181,6 +277,9 @@ async function captureInPage(input: CaptureInput): Promise<CaptureMeasurements> 
     get sampleRate(): number {
       return context.sampleRate;
     },
+    get currentTime(): number {
+      return context.currentTime;
+    },
     get state(): string {
       return context.state;
     },
@@ -188,8 +287,23 @@ async function captureInPage(input: CaptureInput): Promise<CaptureMeasurements> 
     close: (): Promise<void> => context.close(),
     createOscillator: () => {
       const oscillator = context.createOscillator();
+      let ended: (() => void) | null = null;
       const port = {
         frequency: oscillator.frequency,
+        get onended(): (() => void) | null {
+          return ended;
+        },
+        set onended(handler: (() => void) | null) {
+          ended = handler;
+          if (handler === null) {
+            oscillator.onended = null;
+          } else {
+            const active: () => void = handler;
+            oscillator.onended = (): void => {
+              active();
+            };
+          }
+        },
         setPeriodicWave: (wave: object): void => {
           oscillator.setPeriodicWave(wave as PeriodicWave);
         },
@@ -202,8 +316,12 @@ async function captureInPage(input: CaptureInput): Promise<CaptureMeasurements> 
         start: (): void => {
           oscillator.start();
         },
-        stop: (): void => {
-          oscillator.stop();
+        stop: (when?: number): void => {
+          if (when === undefined) {
+            oscillator.stop();
+          } else {
+            oscillator.stop(when);
+          }
         },
       };
       nodeOf.set(port, oscillator);
@@ -324,6 +442,401 @@ async function captureInPage(input: CaptureInput): Promise<CaptureMeasurements> 
   };
 }
 
+/**
+ * 包絡の時系列を採取する手順。
+ *
+ * 立ち上がりの途中から持続までを等間隔で追い、ノートオフ後の減衰と消音への
+ * 推移を同じ採取口で測る。外側の変数は掴まない。合否は検査側が決める。
+ *
+ * @param input - 実コードの変換結果と採取条件。
+ * @returns 採取した標本。
+ */
+async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<EnvelopeMeasurements> {
+  const moduleUrl = URL.createObjectURL(new Blob([input.moduleCode], { type: 'text/javascript' }));
+  // 検査実行側の vitest が bare の動的导入を SSR 用に書き換えるため、文字列のまま
+  // ブラウザへ送り、実行時に組み立てる間接导入で実コードを読む。外側の値は掴まない。
+  const importModule = new Function('url', 'return import(url)') as unknown as (
+    url: string,
+  ) => Promise<unknown>;
+  // 変換対象は検査対象と同じ出所の実コードであり、外部からの入力ではない。
+  // 导入の戻り値は `unknown` になるため、演奏口の最小口だけを主張する。
+  const toneModule = (await importModule(moduleUrl)) as unknown as {
+    createHarmonicToneSession(createContext: () => HarmonicToneContext): HarmonicToneSession;
+  };
+  URL.revokeObjectURL(moduleUrl);
+
+  const context = new AudioContext();
+  const tap = context.createAnalyser();
+  tap.fftSize = input.fftSize;
+  tap.smoothingTimeConstant = 0;
+  tap.connect(context.destination);
+
+  const nodeOf = new WeakMap<object, AudioNode>();
+  const resolveNode = (target: object): AudioNode => nodeOf.get(target) ?? (target as AudioNode);
+
+  const createContext = (): HarmonicToneContext => ({
+    destination: tap,
+    get sampleRate(): number {
+      return context.sampleRate;
+    },
+    get currentTime(): number {
+      return context.currentTime;
+    },
+    get state(): string {
+      return context.state;
+    },
+    resume: (): Promise<void> => context.resume(),
+    close: (): Promise<void> => context.close(),
+    createOscillator: () => {
+      const oscillator = context.createOscillator();
+      let ended: (() => void) | null = null;
+      const port = {
+        frequency: oscillator.frequency,
+        get onended(): (() => void) | null {
+          return ended;
+        },
+        set onended(handler: (() => void) | null) {
+          ended = handler;
+          if (handler === null) {
+            oscillator.onended = null;
+          } else {
+            const active: () => void = handler;
+            oscillator.onended = (): void => {
+              active();
+            };
+          }
+        },
+        setPeriodicWave: (wave: object): void => {
+          oscillator.setPeriodicWave(wave as PeriodicWave);
+        },
+        connect: (target: object): void => {
+          oscillator.connect(resolveNode(target));
+        },
+        disconnect: (): void => {
+          oscillator.disconnect();
+        },
+        start: (): void => {
+          oscillator.start();
+        },
+        stop: (when?: number): void => {
+          if (when === undefined) {
+            oscillator.stop();
+          } else {
+            oscillator.stop(when);
+          }
+        },
+      };
+      nodeOf.set(port, oscillator);
+      return port;
+    },
+    createGain: () => {
+      const gainNode = context.createGain();
+      const port = {
+        gain: gainNode.gain,
+        connect: (target: object): void => {
+          gainNode.connect(resolveNode(target));
+        },
+        disconnect: (): void => {
+          gainNode.disconnect();
+        },
+      };
+      nodeOf.set(port, gainNode);
+      return port;
+    },
+    createPeriodicWave: (
+      real: Float32Array,
+      imag: Float32Array,
+      constraints: { disableNormalization: boolean },
+    ): object => context.createPeriodicWave(real, imag, constraints),
+  });
+
+  const rmsOf = (): number => {
+    const samples = new Float32Array(tap.fftSize);
+    tap.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) {
+      sum += sample * sample;
+    }
+    return Math.sqrt(sum / samples.length);
+  };
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const session = toneModule.createHarmonicToneSession(createContext);
+  await session.start({ frequency: input.frequency, preset: input.preset });
+  // 立ち上がりの途中（アタックの完了前）の読み。
+  await sleep(input.sampleIntervalMs);
+  const earlyRms = rmsOf();
+  // 立ち上がりと減衰を横断して持続まで追う時系列。
+  const series: number[] = [];
+  for (let index = 0; index < input.seriesSamples; index += 1) {
+    await sleep(input.sampleIntervalMs);
+    series.push(rmsOf());
+  }
+  let peakRms = 0;
+  for (const value of series) {
+    if (value > peakRms) {
+      peakRms = value;
+    }
+  }
+  const sustainSamples = series.slice(-4);
+  let sustainMean = 0;
+  for (const value of sustainSamples) {
+    sustainMean += value;
+  }
+  sustainMean /= sustainSamples.length;
+  let sustainMaxDeviation = 0;
+  for (const value of sustainSamples) {
+    const deviation = Math.abs(value - sustainMean);
+    if (deviation > sustainMaxDeviation) {
+      sustainMaxDeviation = deviation;
+    }
+  }
+  const stateAtTone = context.state;
+  session.noteOff();
+  await sleep(input.sampleIntervalMs);
+  const releaseFirstRms = rmsOf();
+  await sleep(input.sampleIntervalMs * 3);
+  const releaseMidRms = rmsOf();
+  let stoppedRms = rmsOf();
+  let stopPolls = 0;
+  while (
+    (stoppedRms >= input.stoppedRmsMax || stoppedRms >= sustainMean * input.stoppedRmsRatioMax) &&
+    stopPolls * input.pollIntervalMs < input.stopTimeoutMs
+  ) {
+    await sleep(input.pollIntervalMs);
+    stopPolls += 1;
+    stoppedRms = rmsOf();
+  }
+  const stopSettled =
+    stoppedRms < input.stoppedRmsMax && stoppedRms < sustainMean * input.stoppedRmsRatioMax;
+  const playingAfterRelease = session.playing;
+  const releasingAfterRelease = session.releasing;
+  await session.dispose();
+
+  return {
+    sampleRate: context.sampleRate,
+    contextState: stateAtTone,
+    earlyRms,
+    peakRms,
+    sustainMean,
+    sustainMaxDeviation,
+    releaseFirstRms,
+    releaseMidRms,
+    stoppedRms,
+    stopSettled,
+    stopPolls,
+    playingAfterRelease,
+    releasingAfterRelease,
+  };
+}
+
+/**
+ * 途中ノートオフの接続を採取する手順。
+ *
+ * 立ち上がりの途中でノートオフし、直後の窓の段差と減衰の推移を測る。
+ * 外側の変数は掴まない。合否は検査側が決める。
+ *
+ * @param input - 実コードの変換結果と採取条件。
+ * @returns 採取した標本。
+ */
+async function captureMidNoteOffInPage(
+  input: MidNoteOffCaptureInput,
+): Promise<MidNoteOffMeasurements> {
+  const moduleUrl = URL.createObjectURL(new Blob([input.moduleCode], { type: 'text/javascript' }));
+  // 検査実行側の vitest が bare の動的导入を SSR 用に書き換えるため、文字列のまま
+  // ブラウザへ送り、実行時に組み立てる間接导入で実コードを読む。外側の値は掴まない。
+  const importModule = new Function('url', 'return import(url)') as unknown as (
+    url: string,
+  ) => Promise<unknown>;
+  // 変換対象は検査対象と同じ出所の実コードであり、外部からの入力ではない。
+  // 导入の戻り値は `unknown` になるため、演奏口の最小口だけを主張する。
+  const toneModule = (await importModule(moduleUrl)) as unknown as {
+    createHarmonicToneSession(createContext: () => HarmonicToneContext): HarmonicToneSession;
+  };
+  URL.revokeObjectURL(moduleUrl);
+
+  const context = new AudioContext();
+  const tap = context.createAnalyser();
+  tap.fftSize = input.fftSize;
+  tap.smoothingTimeConstant = 0;
+  tap.connect(context.destination);
+
+  const nodeOf = new WeakMap<object, AudioNode>();
+  const resolveNode = (target: object): AudioNode => nodeOf.get(target) ?? (target as AudioNode);
+
+  const createContext = (): HarmonicToneContext => ({
+    destination: tap,
+    get sampleRate(): number {
+      return context.sampleRate;
+    },
+    get currentTime(): number {
+      return context.currentTime;
+    },
+    get state(): string {
+      return context.state;
+    },
+    resume: (): Promise<void> => context.resume(),
+    close: (): Promise<void> => context.close(),
+    createOscillator: () => {
+      const oscillator = context.createOscillator();
+      let ended: (() => void) | null = null;
+      const port = {
+        frequency: oscillator.frequency,
+        get onended(): (() => void) | null {
+          return ended;
+        },
+        set onended(handler: (() => void) | null) {
+          ended = handler;
+          if (handler === null) {
+            oscillator.onended = null;
+          } else {
+            const active: () => void = handler;
+            oscillator.onended = (): void => {
+              active();
+            };
+          }
+        },
+        setPeriodicWave: (wave: object): void => {
+          oscillator.setPeriodicWave(wave as PeriodicWave);
+        },
+        connect: (target: object): void => {
+          oscillator.connect(resolveNode(target));
+        },
+        disconnect: (): void => {
+          oscillator.disconnect();
+        },
+        start: (): void => {
+          oscillator.start();
+        },
+        stop: (when?: number): void => {
+          if (when === undefined) {
+            oscillator.stop();
+          } else {
+            oscillator.stop(when);
+          }
+        },
+      };
+      nodeOf.set(port, oscillator);
+      return port;
+    },
+    createGain: () => {
+      const gainNode = context.createGain();
+      const port = {
+        gain: gainNode.gain,
+        connect: (target: object): void => {
+          gainNode.connect(resolveNode(target));
+        },
+        disconnect: (): void => {
+          gainNode.disconnect();
+        },
+      };
+      nodeOf.set(port, gainNode);
+      return port;
+    },
+    createPeriodicWave: (
+      real: Float32Array,
+      imag: Float32Array,
+      constraints: { disableNormalization: boolean },
+    ): object => context.createPeriodicWave(real, imag, constraints),
+  });
+
+  const rmsOf = (): number => {
+    const samples = new Float32Array(tap.fftSize);
+    tap.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) {
+      sum += sample * sample;
+    }
+    return Math.sqrt(sum / samples.length);
+  };
+  const maxJumpOf = (): number => {
+    const samples = new Float32Array(tap.fftSize);
+    tap.getFloatTimeDomainData(samples);
+    let jump = 0;
+    for (let index = 1; index < samples.length; index += 1) {
+      const difference = Math.abs((samples[index] ?? 0) - (samples[index - 1] ?? 0));
+      if (difference > jump) {
+        jump = difference;
+      }
+    }
+    return jump;
+  };
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const session = toneModule.createHarmonicToneSession(createContext);
+  const baselineRms = rmsOf();
+  await session.start({ frequency: input.frequency, preset: input.preset });
+  // 立ち上がりの途中でノートオフする。
+  await sleep(input.noteOffDelayMs);
+  const preRms = rmsOf();
+  const preJump = maxJumpOf();
+  const stateAtTone = context.state;
+  session.noteOff();
+  const postJump = maxJumpOf();
+  const postRms = rmsOf();
+  await sleep(input.midDelayMs);
+  const midRms = rmsOf();
+  let stoppedRms = rmsOf();
+  let stopPolls = 0;
+  while (
+    (stoppedRms >= input.stoppedRmsMax || stoppedRms >= preRms * input.stoppedRmsRatioMax) &&
+    stopPolls * input.pollIntervalMs < input.stopTimeoutMs
+  ) {
+    await sleep(input.pollIntervalMs);
+    stopPolls += 1;
+    stoppedRms = rmsOf();
+  }
+  const stopSettled =
+    stoppedRms < input.stoppedRmsMax && stoppedRms < preRms * input.stoppedRmsRatioMax;
+  const playingAfterRelease = session.playing;
+  const releasingAfterRelease = session.releasing;
+  await session.dispose();
+
+  return {
+    sampleRate: context.sampleRate,
+    contextState: stateAtTone,
+    baselineRms,
+    preRms,
+    preJump,
+    postJump,
+    postRms,
+    midRms,
+    stoppedRms,
+    stopSettled,
+    stopPolls,
+    playingAfterRelease,
+    releasingAfterRelease,
+  };
+}
+
+/**
+ * 採取用ブラウザを起動する。
+ *
+ * @returns 起動したブラウザ。
+ * @throws `Error` — Chrome の用意または実行体指定が必要な場合。
+ */
+async function launchCaptureBrowser(): Promise<{ browser: import('playwright-core').ChromiumBrowser; version: string }> {
+  const executablePath = process.env['XRIFT_CAPTURE_CHROME'];
+  try {
+    const browser =
+      executablePath === undefined || executablePath === ''
+        ? await chromium.launch({ channel: 'chrome', args: CAPTURE_BROWSER_ARGS })
+        : await chromium.launch({ executablePath, args: CAPTURE_BROWSER_ARGS });
+    return { browser, version: browser.version() };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `採取用ブラウザの起動に失敗した。Chrome の用意または XRIFT_CAPTURE_CHROME での実行体指定が必要である: ${detail}`,
+    );
+  }
+}
+
 describe('調波単音の音声信号採取', () => {
   it(
     '音声グラフの標本で調波スペクトルの生成を判定する',
@@ -335,18 +848,7 @@ describe('調波単音の音声信号採取', () => {
         throw new Error('採取に使うプリセットが見つからない');
       }
 
-      const executablePath = process.env['XRIFT_CAPTURE_CHROME'];
-      let browser;
-      try {
-        browser = await (executablePath === undefined || executablePath === ''
-          ? chromium.launch({ channel: 'chrome', args: CAPTURE_BROWSER_ARGS })
-          : chromium.launch({ executablePath, args: CAPTURE_BROWSER_ARGS }));
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `採取用ブラウザの起動に失敗した。Chrome の用意または XRIFT_CAPTURE_CHROME での実行体指定が必要である: ${detail}`,
-        );
-      }
+      const { browser, version } = await launchCaptureBrowser();
       try {
         const page = await browser.newPage();
         await page.goto('about:blank');
@@ -368,7 +870,7 @@ describe('調波単音の音声信号採取', () => {
         const evidence = {
           scenario: 'harmonic-tone-capture',
           environment: {
-            browser: `chromium/${browser.version()}`,
+            browser: `chromium/${version}`,
             sampleRateHz: measurements.sampleRate,
             contextState: measurements.contextState,
             fftSize: CAPTURE_FFT_SIZE,
@@ -423,6 +925,182 @@ describe('調波単音の音声信号採取', () => {
         // 停止で信号が消えること。
         expect(measurements.stoppedRms).toBeLessThan(STOPPED_RMS_MAX);
         expect(measurements.stoppedRms).toBeLessThan(measurements.toneRms * STOPPED_RMS_RATIO_MAX);
+      } finally {
+        await browser.close();
+      }
+    },
+    90000,
+  );
+
+  it(
+    '音声グラフの時系列で包絡の立ち上がり・持続・減衰と消音を判定する',
+    async () => {
+      const moduleCode = await loadHarmonicModuleCode();
+      const preset = HARMONIC_PRESETS.find((candidate) => candidate.name === 'Low-Limit Pure');
+      if (preset === undefined) {
+        throw new Error('採取に使うプリセットが見つからない');
+      }
+
+      const { browser, version } = await launchCaptureBrowser();
+      try {
+        const page = await browser.newPage();
+        await page.goto('about:blank');
+        const measurements = await page.evaluate<EnvelopeMeasurements, EnvelopeCaptureInput>(
+          captureEnvelopeInPage,
+          {
+            moduleCode,
+            preset,
+            frequency: CAPTURE_FREQUENCY_HZ,
+            fftSize: ENVELOPE_FFT_SIZE,
+            sampleIntervalMs: ENVELOPE_SAMPLE_INTERVAL_MS,
+            seriesSamples: 16,
+            pollIntervalMs: CAPTURE_POLL_INTERVAL_MS,
+            stopTimeoutMs: STOP_TIMEOUT_MS,
+            stoppedRmsMax: STOPPED_RMS_MAX,
+            stoppedRmsRatioMax: STOPPED_RMS_RATIO_MAX,
+          } satisfies EnvelopeCaptureInput,
+        );
+
+        const evidence = {
+          scenario: 'harmonic-envelope-capture',
+          environment: {
+            browser: `chromium/${version}`,
+            sampleRateHz: measurements.sampleRate,
+            contextState: measurements.contextState,
+            fftSize: ENVELOPE_FFT_SIZE,
+            preset: preset.name,
+            frequencyHz: CAPTURE_FREQUENCY_HZ,
+          },
+          thresholds: {
+            sustainRmsMin: SUSTAIN_RMS_MIN,
+            attackEarlyRatioMax: ATTACK_EARLY_RATIO_MAX,
+            envelopePeakRatioMin: ENVELOPE_PEAK_RATIO_MIN,
+            sustainDeviationRatioMax: SUSTAIN_DEVIATION_RATIO_MAX,
+            releaseFirstRatioMax: RELEASE_FIRST_RATIO_MAX,
+            releaseFirstRatioMin: RELEASE_FIRST_RATIO_MIN,
+            stoppedRmsMax: STOPPED_RMS_MAX,
+            stoppedRmsRatioMax: STOPPED_RMS_RATIO_MAX,
+          },
+          measurements,
+          note: '音声グラフ内の標本であり、物理出力の証明にはならない',
+        };
+        const evidenceDir = fileURLToPath(
+          new URL('../../tmp/harmonic-envelope-capture/', import.meta.url),
+        );
+        await mkdir(evidenceDir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/:/g, '-');
+        await writeFile(
+          `${evidenceDir}capture-${stamp}-chromium.json`,
+          `${JSON.stringify(evidence, null, 2)}\n`,
+        );
+
+        // 立ち上がり：途中の読みは持続平均を下回り、無音から上昇すること。
+        expect(measurements.sustainMean).toBeGreaterThan(SUSTAIN_RMS_MIN);
+        expect(measurements.earlyRms).toBeLessThan(
+          measurements.sustainMean * ATTACK_EARLY_RATIO_MAX,
+        );
+        // 到達と減衰：頂上は持続平均を上回ること。
+        expect(measurements.peakRms).toBeGreaterThan(
+          measurements.sustainMean * ENVELOPE_PEAK_RATIO_MIN,
+        );
+        // 持続：末尾の標本は平均の近くに留まること。
+        expect(measurements.sustainMaxDeviation).toBeLessThan(
+          measurements.sustainMean * SUSTAIN_DEVIATION_RATIO_MAX,
+        );
+        // 減衰：直後は跳ね上がらず、即時切断でもないこと。
+        expect(measurements.releaseFirstRms).toBeLessThan(
+          measurements.sustainMean * RELEASE_FIRST_RATIO_MAX,
+        );
+        expect(measurements.releaseFirstRms).toBeGreaterThan(
+          measurements.sustainMean * RELEASE_FIRST_RATIO_MIN,
+        );
+        // 減衰の途中はさらに下がること。
+        expect(measurements.releaseMidRms).toBeLessThan(measurements.releaseFirstRms);
+        // 消音：減衰完了後は信号が消え、声の状態も戻ること。
+        expect(measurements.stoppedRms).toBeLessThan(STOPPED_RMS_MAX);
+        expect(measurements.stoppedRms).toBeLessThan(
+          measurements.sustainMean * STOPPED_RMS_RATIO_MAX,
+        );
+        expect(measurements.playingAfterRelease).toBe(false);
+        expect(measurements.releasingAfterRelease).toBe(false);
+      } finally {
+        await browser.close();
+      }
+    },
+    90000,
+  );
+
+  it(
+    '音声グラフの標本で途中ノートオフの接続と減衰完了を判定する',
+    async () => {
+      const moduleCode = await loadHarmonicModuleCode();
+      const preset = HARMONIC_PRESETS.find((candidate) => candidate.name === 'Low-Limit Pure');
+      if (preset === undefined) {
+        throw new Error('採取に使うプリセットが見つからない');
+      }
+
+      const { browser, version } = await launchCaptureBrowser();
+      try {
+        const page = await browser.newPage();
+        await page.goto('about:blank');
+        const measurements = await page.evaluate<MidNoteOffMeasurements, MidNoteOffCaptureInput>(
+          captureMidNoteOffInPage,
+          {
+            moduleCode,
+            preset,
+            frequency: CAPTURE_FREQUENCY_HZ,
+            fftSize: ENVELOPE_FFT_SIZE,
+            noteOffDelayMs: 40,
+            midDelayMs: 200,
+            pollIntervalMs: CAPTURE_POLL_INTERVAL_MS,
+            stopTimeoutMs: STOP_TIMEOUT_MS,
+            stoppedRmsMax: STOPPED_RMS_MAX,
+            stoppedRmsRatioMax: STOPPED_RMS_RATIO_MAX,
+          } satisfies MidNoteOffCaptureInput,
+        );
+
+        const evidence = {
+          scenario: 'harmonic-mid-noteoff-capture',
+          environment: {
+            browser: `chromium/${version}`,
+            sampleRateHz: measurements.sampleRate,
+            contextState: measurements.contextState,
+            fftSize: ENVELOPE_FFT_SIZE,
+            preset: preset.name,
+            frequencyHz: CAPTURE_FREQUENCY_HZ,
+          },
+          thresholds: {
+            baselineRmsMax: BASELINE_RMS_MAX,
+            noteOffJumpMax: NOTE_OFF_JUMP_MAX,
+            stoppedRmsMax: STOPPED_RMS_MAX,
+            stoppedRmsRatioMax: STOPPED_RMS_RATIO_MAX,
+          },
+          measurements,
+          note: '音声グラフ内の標本であり、物理出力の証明にはならない',
+        };
+        const evidenceDir = fileURLToPath(
+          new URL('../../tmp/harmonic-mid-noteoff-capture/', import.meta.url),
+        );
+        await mkdir(evidenceDir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/:/g, '-');
+        await writeFile(
+          `${evidenceDir}capture-${stamp}-chromium.json`,
+          `${JSON.stringify(evidence, null, 2)}\n`,
+        );
+
+        // 立ち上がりの途中で信号があること。
+        expect(measurements.baselineRms).toBeLessThan(BASELINE_RMS_MAX);
+        expect(measurements.preRms).toBeGreaterThan(measurements.baselineRms);
+        // 接続点に粗い不連続がないこと。直後の窓は切断前の標本を主に含むため、
+        // 段差は滑らかな波形の範囲に留まる。不連続の有無は前後の段差の記録で残す。
+        expect(measurements.postJump).toBeLessThan(NOTE_OFF_JUMP_MAX);
+        // 減衰の途中はまだ信号が残り、完了後は消音すること。
+        // 即時切断では途中も消音と同じになるため、この差で取り違えを検出する。
+        expect(measurements.midRms).toBeGreaterThan(measurements.stoppedRms);
+        expect(measurements.stoppedRms).toBeLessThan(STOPPED_RMS_MAX);
+        expect(measurements.stoppedRms).toBeLessThan(measurements.preRms * STOPPED_RMS_RATIO_MAX);
+        expect(measurements.playingAfterRelease).toBe(false);
+        expect(measurements.releasingAfterRelease).toBe(false);
       } finally {
         await browser.close();
       }
