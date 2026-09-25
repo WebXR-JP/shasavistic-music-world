@@ -16,7 +16,7 @@
 
 段階は調波スペクトル単音、声ごとのエンベロープ、複数声・比率同時発音の順に足す。各段を個別の受入れ単位として判定する。音の終了は即時切断とせず、note-off を受けて減衰を鳴らし切り、停止と解放を区別する。
 
-置き方は既存の単音処理 `src/audio/singleTone.ts` とその検査を移行中の回帰対象として残す。新能力の音声処理はワールド内音声置場の別の演奏口として構成する。スペクトル係数計算と文脈・声・資源の寿命管理を分離する。新しい利用経路が判定できたら `ToneSwitch` からの接続を切り替え、旧演奏口の存廃を整理する。配置は `World.tsx`、操作部品は起動と表示、音声側は発音・停止・解放という親の分担を保つ。将来用の共通シンセ基盤や常設診断口は作らない。
+置き方は既存の単音処理 `src/audio/singleTone.ts` とその検査を移行中の回帰対象として残す。新能力の音声処理はワールド内音声置場の別の演奏口として構成する。スペクトル係数計算と文脈・声・資源の寿命管理を分離する。旧口と新口は並置して移行中であり、後継の利用経路が判定できたら旧口とその専用検査を整理する。和音の実装・受入れと旧機能の撤去は別々に取り消せる変更として扱う。配置は `World.tsx`、操作部品は起動と表示、音声側は発音・停止・解放という親の分担を保つ。将来用の共通シンセ基盤や常設診断口は作らない。
 
 ## 検証との接続
 
@@ -45,6 +45,7 @@ Chrome で係数どおりの成分や許容できる音質が得られない場�
 - workflow/design/shasavistic-music-lab.md
 - workflow/design/shasavistic-music-lab/single-tone.md
 - workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとのエンベロープの方式）
+- workflow/design/shasavistic-music-lab/harmonic-synth/polyphony.md（複数声・比率同時発音の方式）
 - research/シャサフ式音楽向けシンセサイザー 基本波形設計案.md（候補・根拠。決定の正本にしない）
 - workflow/spec/single-tone-capture.md
 - shasavistic-music-lab/AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md

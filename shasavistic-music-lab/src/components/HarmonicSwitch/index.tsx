@@ -1,8 +1,11 @@
 import { Interactable } from '@xrift/world-components';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { HARMONIC_ENVELOPE_RELEASE_TIME } from '../../audio/harmonicEnvelope';
-import { HARMONIC_PRESETS } from '../../audio/harmonicPresets';
-import { type HarmonicToneSession, createHarmonicToneSession } from '../../audio/harmonicTone';
+import {
+  type HarmonicChordSession,
+  createHarmonicChordSession,
+} from '../../audio/harmonicChord';
+import { HARMONIC_CHORD_SETS } from './chordSets';
 
 /** 操作口の表示状態。停止済み・発音中・減衰中を区別する。 */
 type HarmonicSwitchStatus = 'stopped' | 'playing' | 'releasing';
@@ -13,19 +16,20 @@ export interface HarmonicSwitchProps {
 }
 
 /**
- * 調波単音の再生を起動する操作口。
+ * 調波和音の再生を起動する操作口。
  *
  * 発振器そのものではなく再生の起動口であり、利用者の操作の中でのみ
  * 音声文脈を生成・再開する。音声文脈は操作口の存続中は一つだけ保ち、
  * 通常の終了には減衰の予約（ノートオフ）を使い、破棄時に文脈を一度だけ閉じる。
- * 鳴らすたびに次のプリセットへ進み、初回の聴き比べだけを担う。
- * 減衰中の操作では次の声を重ねない。直接操作子は作らない。
+ * 鳴らすたびに次の「音色と比率集合」へ進み、聴き比べだけを担う。
+ * 集合には単声も残し、受入れ済みの調波単音を利用経路から消さない。
+ * 減衰中の操作では次の和音を重ねない。鍵盤や個別声の操作口は作らない。
  */
 export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps): React.JSX.Element {
   const [status, setStatus] = useState<HarmonicSwitchStatus>('stopped');
-  const [presetIndex, setPresetIndex] = useState(0);
+  const [setIndex, setSetIndex] = useState(0);
   // 操作口の存続に対応する演奏口。文脈の生成は初回の操作まで遅らせる。
-  const sessionRef = useRef<HarmonicToneSession | null>(null);
+  const sessionRef = useRef<HarmonicChordSession | null>(null);
   // 開始時に使う順番。停止と開始をまたぐ二度の操作でずれないよう参照でも保つ。
   const nextIndexRef = useRef(0);
   const mountedRef = useRef(true);
@@ -45,11 +49,11 @@ export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps
   const handleInteract = useCallback(() => {
     let session = sessionRef.current;
     if (session === null) {
-      session = createHarmonicToneSession();
+      session = createHarmonicChordSession();
       sessionRef.current = session;
     }
     const active = session;
-    // 減衰中の操作では次の声を重ねない。
+    // 減衰中の操作では次の和音を重ねない。
     if (active.releasing) {
       return;
     }
@@ -58,7 +62,7 @@ export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps
       setStatus('releasing');
       // 減衰完了の表示戻しだけを時間で扱う。声の停止と切断は演奏口の
       // 終了通知が所有照合で行い、再操作の可否は演奏口の状態で決める。
-      // 戻る前に次の声が始まっていれば表示を上書きしない。
+      // 戻る前に次の和音が始まっていれば表示を上書きしない。
       window.setTimeout(() => {
         if (mountedRef.current && !active.releasing && !active.playing) {
           setStatus('stopped');
@@ -66,10 +70,11 @@ export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps
       }, HARMONIC_ENVELOPE_RELEASE_TIME * 1000 + 150);
       return;
     }
-    const preset = HARMONIC_PRESETS[nextIndexRef.current];
+    // 聴き比べの組合せ列は静的に空でなく、順番は剰余で範囲に収める。
+    const chordSet = HARMONIC_CHORD_SETS[nextIndexRef.current];
     // 非同期の生成完了を待つ間の連打は、演奏口の中で一つの起動に束ねる。
     void active
-      .start({ preset })
+      .start({ preset: chordSet.preset, ratios: chordSet.ratios })
       .then(() => {
         if (!mountedRef.current) {
           void active.dispose();
@@ -80,10 +85,10 @@ export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps
           return;
         }
         if (active.playing) {
-          // 鳴らせた場合だけ次のプリセットへ進める。
-          const following = (nextIndexRef.current + 1) % HARMONIC_PRESETS.length;
+          // 鳴らせた場合だけ次の組合せへ進める。
+          const following = (nextIndexRef.current + 1) % HARMONIC_CHORD_SETS.length;
           nextIndexRef.current = following;
-          setPresetIndex(following);
+          setSetIndex(following);
           setStatus('playing');
           return;
         }
@@ -96,7 +101,8 @@ export function HarmonicSwitch({ position = [1.5, 1.5, 6] }: HarmonicSwitchProps
       });
   }, []);
 
-  const currentName = HARMONIC_PRESETS[presetIndex].name;
+  // 聴き比べの組合せ列は静的に空でなく、表示は現在の順番に従う。
+  const currentName = HARMONIC_CHORD_SETS[setIndex].name;
 
   return (
     <Interactable

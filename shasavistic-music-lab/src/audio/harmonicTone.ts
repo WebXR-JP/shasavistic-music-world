@@ -50,6 +50,15 @@ export interface StartHarmonicToneOptions {
    * 鳴らすプリセット。省略時は減衰既定・重みなし・上限なしの標準波形。
    */
   readonly preset?: HarmonicPreset;
+  /**
+   * 声の最大利得（アタックの到達点）。正の有限値。
+   *
+   * 和音側が有効声数で総利得予算を分配した値を渡すためにある。
+   * 単独の利用では省略し、従来の固定値を保つ。
+   *
+   * @defaultValue `HARMONIC_TONE_OUTPUT_GAIN`（省略時に開始処理が適用）。
+   */
+  readonly outputGain?: number;
 }
 
 /**
@@ -181,10 +190,11 @@ export interface HarmonicToneSession {
  *
  * 実物の終了通知口は事象を受け取る形のため、引数なしの後始末口で包んで
  * 受け渡す。読替えの対応付けだけを行い、信号や予約内容には触れない。
+ * 和音側が複数の声で一つの文脈を共有するためにも使う。
  *
  * @returns 操作口の存続中は使い回す音声文脈。
  */
-function createDefaultContext(): HarmonicToneContext {
+export function createHarmonicToneContext(): HarmonicToneContext {
   const context = new AudioContext();
   // ADR: 代替物の接続先を実ノードへ読み替える対応付け。声の利得器は代替物であり
   // 実ノードではないため、発振器側の接続で実体へ読み替える。出力先は実ノードとして
@@ -279,7 +289,7 @@ function createDefaultContext(): HarmonicToneContext {
  * @returns 操作口の存続中は使い回す演奏口。
  */
 export function createHarmonicToneSession(
-  createContext: () => HarmonicToneContext = createDefaultContext,
+  createContext: () => HarmonicToneContext = createHarmonicToneContext,
 ): HarmonicToneSession {
   let context: HarmonicToneContext | null = null;
   let oscillator: HarmonicToneOscillator | null = null;
@@ -288,6 +298,8 @@ export function createHarmonicToneSession(
   let releasing = false;
   // 所有する声のノートオン時刻（音声文脈の時刻基準）。途中ノートオフの開始値の算出に使う。
   let noteOnTime = 0;
+  // 所有する声の最大利得。途中ノートオフの開始値の算出に使う。
+  let voicePeakGain = HARMONIC_TONE_OUTPUT_GAIN;
   let disposed = false;
   // 起動の完了待ちを取り消すための世代。停止と破棄で進め、起動は開始時の値を掴む。
   // ノートオフは同じ声の継続のため世代を進めない。
@@ -351,6 +363,10 @@ export function createHarmonicToneSession(
       if (!Number.isFinite(frequency) || frequency <= 0) {
         throw new RangeError(`周波数は正の有限値であること: ${frequency}`);
       }
+      const peakGain = options.outputGain ?? HARMONIC_TONE_OUTPUT_GAIN;
+      if (!Number.isFinite(peakGain) || peakGain <= 0) {
+        throw new RangeError(`声の最大利得は正の有限値であること: ${options.outputGain}`);
+      }
       if (disposed) {
         throw new Error('破棄後の演奏口は使えない');
       }
@@ -388,7 +404,7 @@ export function createHarmonicToneSession(
       try {
         // 声の利得は発音前に無音とし、現在時刻を基準に包絡を予約する。
         nextGain.gain.value = 0;
-        scheduleNoteOn(nextGain.gain, startTime, HARMONIC_TONE_OUTPUT_GAIN);
+        scheduleNoteOn(nextGain.gain, startTime, peakGain);
         next.setPeriodicWave(wave);
         next.frequency.value = frequency;
         next.connect(nextGain);
@@ -411,6 +427,7 @@ export function createHarmonicToneSession(
       oscillator = next;
       gain = nextGain;
       noteOnTime = startTime;
+      voicePeakGain = peakGain;
 
       // 自身への参照は完了後の後始末の照合に使う。非同期の継続が動く時点では
       // 代入済みのため、初期値付きで宣言して確定割り当て診断を避ける。
@@ -477,7 +494,7 @@ export function createHarmonicToneSession(
       const currentGain = envelopeGainAtTime(
         noteOnTime,
         noteOffTime,
-        HARMONIC_TONE_OUTPUT_GAIN,
+        voicePeakGain,
         HARMONIC_ENVELOPE_DEFAULTS,
       );
       const releaseEnd = scheduleRelease(

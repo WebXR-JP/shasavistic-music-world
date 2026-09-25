@@ -1035,3 +1035,41 @@ describe('調波単音の非同期の競合と失敗', () => {
     await session.dispose();
   });
 });
+
+describe('声の最大利得の指定', () => {
+  it('指定した利得で包絡を予約し途中ノートオフの開始値にも使う', async () => {
+    const harness = createHarness(48000, { cancelAndHold: false });
+    const session = createHarmonicToneSession(harness.createContext);
+
+    await session.start({ outputGain: 0.05 });
+
+    const gain = harness.contexts[0].gains[0];
+    expect(gain.events[1].value).toBeCloseTo(0.05, 10);
+    expect(gain.events[2].value).toBeCloseTo(0.05 * SUSTAIN_LEVEL, 10);
+
+    // 立ち上がりの半ばでノートオフし、指定利得に基づく現在値でつなぐ。
+    const noteOffTime = ATTACK_TIME / 2;
+    harness.contexts[0].currentTime = noteOffTime;
+    session.noteOff();
+
+    const reset = gain.events.find(
+      (event, index) => event.kind === 'setValue' && index > 0 && event.time === noteOffTime,
+    );
+    expect(reset?.value).toBeCloseTo(0.025, 6);
+    await session.dispose();
+  });
+
+  it('正でない利得の生成を音声文脈を作らずに拒む', async () => {
+    const harness = createHarness();
+    const session = createHarmonicToneSession(harness.createContext);
+
+    await expect(session.start({ outputGain: 0 })).rejects.toBeInstanceOf(RangeError);
+    await expect(session.start({ outputGain: -0.05 })).rejects.toBeInstanceOf(RangeError);
+    await expect(session.start({ outputGain: Number.NaN })).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      session.start({ outputGain: Number.POSITIVE_INFINITY }),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(harness.contexts).toHaveLength(0);
+    await session.dispose();
+  });
+});
