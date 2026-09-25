@@ -20,7 +20,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:interact": "XRIFT_INTERACT_CAPTURE=1 vitest run src/audio/harmonicInteract.capture.test.ts"
   },
   "peerDependencies": {
     "@react-three/drei": "^10.7.3",
