@@ -11,7 +11,7 @@ import { HARMONIC_CHORD_MAX_VOICES } from '../../audio/harmonicChord';
 import { HARMONIC_PRESETS } from '../../audio/harmonicPresets';
 import { HARMONIC_TONE_FREQUENCY_HZ } from '../../audio/harmonicTone';
 import { resolveHarmonicVoices } from '../../audio/harmonicRatio';
-import { HARMONIC_CHORD_SETS } from './chordSets';
+import { HARMONIC_CHORD_SETS, formatHarmonicRatioLabel } from './chordSets';
 
 describe('聴き比べの組合せ', () => {
   it('先頭に単声を残す', () => {
@@ -43,5 +43,22 @@ describe('聴き比べの組合せ', () => {
     for (const chordSet of HARMONIC_CHORD_SETS) {
       expect(HARMONIC_PRESETS).toContain(chordSet.preset);
     }
+  });
+
+  it('4件の選択IDが重ならず常時表示の比率行と対応する', () => {
+    expect(HARMONIC_CHORD_SETS).toHaveLength(4);
+    const ids = HARMONIC_CHORD_SETS.map((chordSet) => chordSet.id);
+    for (const id of ids) {
+      expect(id.length).toBeGreaterThan(0);
+    }
+    expect(new Set(ids).size).toBe(ids.length);
+    const labels = new Map(HARMONIC_CHORD_SETS.map((chordSet) => [chordSet.id, chordSet]));
+    expect(formatHarmonicRatioLabel(labels.get('single-neutral')?.ratios ?? [])).toBe('1/1');
+    expect(formatHarmonicRatioLabel(labels.get('fifth-low-limit')?.ratios ?? [])).toBe('1/1 3/2');
+    expect(formatHarmonicRatioLabel(labels.get('major-triad-neutral')?.ratios ?? [])).toBe(
+      '1/1 5/4 3/2',
+    );
+    expect(formatHarmonicRatioLabel(labels.get('seventh-septimal')?.ratios ?? [])).toBe('1/1 7/4');
+    expect(formatHarmonicRatioLabel([])).toBe('');
   });
 });

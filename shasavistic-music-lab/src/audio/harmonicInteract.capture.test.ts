@@ -1,16 +1,17 @@
 /**
- * 利用者の実操作起点による調波和音の生成・減衰・進行の採取判定。
+ * 利用者の実操作起点による4 Cube の選択・切替の採取判定。
  *
  * 既存の採取検査（`harmonicTone.capture.test.ts`・`harmonicChord.capture.test.ts`）は
  * 演奏口を直接駆動するため、実操作経路（`Interactable` の操作口の駆動）を通らない。
  * この検査は開発サーバでワールドを起動し、信頼済み入力（Playwright のキーボード移動と
- * マウス操作）だけで `HarmonicSwitch` を操作して、操作起点で生まれた音声文脈の出力を
- * 採取口（`AnalyserNode` への分岐）で判定する。自動再生方針の緩和は使わず、文脈が操作
- * 由来の再開で `running` になること自体を操作起点の証拠に含める。
+ * マウス操作）だけで4つの Cube（`HarmonicSwitch`）を操作して、操作起点で生まれた
+ * 音声文脈の出力を採取口（`AnalyserNode` への分岐）で判定する。自動再生方針の緩和は
+ * 使わず、文脈が操作由来の再開で `running` になること自体を操作起点の証拠に含める。
  * 採取口は検査が用意する足場であり、ワールドの実行時挙動は変えない。
  *
- * 照準は利用者と同じ手段（`D` キーによる右移動と中央照準の命中表示）で行い、
- * 対象の正しさは音の成分（狙った倍音と五度の声）で検出する。
+ * 照準は利用者と同じ手段（`A`・`D` キーによる左右移動と中央照準の命中表示）で行い、
+ * 左から右への掃引で4 Cube を順に見つける。対象の正しさは音の成分（各集合の声の
+ * 基音）で検出し、遭遇順が聴き比べ列の順序と一致することで配置の対応も確かめる。
  *
  * 覆う層：実操作経路から演奏口・実音声グラフへの信号生成（開発環境のブラウザ内）。
  * 覆わない層：ホスト環境の操作・許可・聴き分けと物理出力。物理出力の証明には
@@ -141,7 +142,7 @@ const INTERACT_INIT_SCRIPT = [
   '})();',
 ].join('\n');
 
-/** 採取に使う実ブラウザの起動引数。自動再生方針は緩めず、発声だけ抑える。 */
+/** 採取に使う実ブラウザの起動引数。自動再生方針は緩めない。 */
 const INTERACT_BROWSER_ARGS = ['--mute-audio'];
 
 /** 成分の採取口の窓の大きさ。周波数分解能を優先する。 */
@@ -156,23 +157,35 @@ const POLL_INTERVAL_MS = 100;
 /** 開始後の信号の出現を待つ上限（ミリ秒）。描画の遅れを吸収するための待ちであり合否ではない。 */
 const TONE_TIMEOUT_MS = 6000;
 
+/** 切替後の新成分の出現を待つ上限（ミリ秒）。減衰完了後の自動開始を含むため長めにする。 */
+const SWITCH_TIMEOUT_MS = 10000;
+
 /** 減衰完了後の消音を待つ上限（ミリ秒）。描画の遅れを吸収するための待ちであり合否ではない。 */
 const STOP_TIMEOUT_MS = 4000;
 
 /** 照準の命中表示が出るまでの上限（ミリ秒）。描画の遅れを吸収するための待ちであり合否ではない。 */
 const AIM_TIMEOUT_MS = 30000;
 
-/** 照準移動の一押しの長さ（ミリ秒）。移動速度に対する刻みであり合否ではない。 */
-const STRAFE_BURST_MS = 60;
+/** 掃引の一押しの長さ（ミリ秒）。Cube を飛び越えない小刻みであり合否ではない。 */
+const SWEEP_BURST_MS = 40;
 
-/** 照準移動の押しの後の落ち着き待ち（ミリ秒）。慣性の収まりを待つための待ちであり合否ではない。 */
-const STRAFE_SETTLE_MS = 250;
+/** 掃引の押しの後の落ち着き待ち（ミリ秒）。慣性の収まりを待つための待ちであり合否ではない。 */
+const SWEEP_SETTLE_MS = 200;
 
-/** 照準移動の押しの上限回数。 */
-const STRAFE_MAX_BURSTS = 14;
+/** 左への掃引の押しの上限回数。近傍だけを移動するため少なくする。 */
+const SWEEP_LEFT_MAX_BURSTS = 40;
+
+/** 右への掃引の押しの上限回数。左端から右端までの往復に足りる回数にする。 */
+const SWEEP_RIGHT_MAX_BURSTS = 60;
+
+/** 切替先の探索の押しの上限回数。 */
+const SWITCH_MAX_BURSTS = 40;
 
 /** 操作前の音声文脈の数。操作まで文脈を作らないこと。 */
 const BASELINE_CONTEXT_COUNT = 0;
+
+/** 4 Cube で共有する音声文脈の数。Cube ごとに文脈を作らないこと。 */
+const SHARED_CONTEXT_COUNT = 1;
 
 /** 発音中に求める実効値の下限。総利得予算の分配後の水準に合わせる。 */
 const TONE_RMS_MIN = 0.03;
@@ -212,14 +225,29 @@ const ABSENT_DB_MAX = -85;
 /** 除外成分に求める落ち込み（基音成分からの差、dB）。 */
 const ABSENT_DROP_DB_MIN = 30;
 
-/** 一操作目の単声の基音（Hz）。聴き比べ列の先頭に対応する。 */
-const SINGLE_BASE_HZ = 440;
+/** 全 Cube に共通の基音（Hz）。聴き比べ列の基準周波数に対応する。 */
+const BASE_HZ = 440;
 
-/** 一操作目の単声に現れる倍音（Hz）。調波であることの証拠に使う。 */
-const SINGLE_HARMONIC_HZ = 880;
+/** 単声に現れる倍音（Hz）。調波であることの証拠に使う。 */
+const HARMONIC_HZ = 880;
 
-/** 二和音目の第二声の基音（Hz）。単声の倍音列に現れない。 */
-const FIFTH_SECOND_HZ = 660;
+/** 五度・長三和音の第二声の基音（Hz）。単声の倍音列に現れない。 */
+const FIFTH_HZ = 660;
+
+/** 長三和音の中声の基音（Hz）。五度・七度の集合に現れない。 */
+const THIRD_HZ = 550;
+
+/** 七度の第二声の基音（Hz）。他の集合に現れない。 */
+const SEVENTH_HZ = 770;
+
+/** 左から右への遭遇順に期待する集合の種類。配置の対応の判定に使う。 */
+const EXPECTED_LEFT_ORDER = ['fifth', 'single'] as const;
+
+/** 右への折り返しで新たに期待する集合の種類。 */
+const EXPECTED_RIGHT_ORDER = ['triad', 'seventh'] as const;
+
+/** 集合の種類。成分の組合せで識別する。 */
+type SweepChordKind = 'single' | 'fifth' | 'triad' | 'seventh';
 
 /** 眠る。固定の待ちではなく区切りのための待ちに使う。 */
 function sleep(ms: number): Promise<void> {
@@ -255,17 +283,17 @@ async function launchInteractBrowser(): Promise<{
 
 /** 操作と採取の時系列の記録。証拠に残し、合否の判定は検査側が行う。 */
 interface InteractOperationLog {
-  readonly initialHit: boolean;
-  readonly strafeBursts: number;
-  readonly aimedHit: boolean;
+  readonly sweepBursts: number;
+  readonly leftOrder: readonly string[];
+  readonly rightOrder: readonly string[];
   readonly clickTrusted: boolean[];
 }
 
 describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
-  '実操作起点の調波和音の採取',
+  '実操作起点の4 Cube の採取',
   () => {
     it(
-      '操作口の駆動で単声・減衰・次和音の進行を判定する',
+      '4 Cube の照準・選択で単声と各和音の成分・停止・減衰・切替を判定する',
       async () => {
         let server: ViteDevServer | null = null;
         const { browser, version } = await launchInteractBrowser();
@@ -290,14 +318,11 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await page.goto(devUrl, { waitUntil: 'load', timeout: 60000 });
           await page.waitForSelector('canvas', { timeout: 60000 });
 
-          // 操作口は一つだけであり、生成直後の中央照準の当たり外れを記録する。
           // 中央照準の表示が出るまで待つのは描画の立上がりのためであり合否ではない。
-          let initialHit = false;
           const aimStart = Date.now();
           while (Date.now() - aimStart < AIM_TIMEOUT_MS) {
             const hit = await page.evaluate(() => window.__crosshairActive());
             if (hit !== null) {
-              initialHit = hit;
               break;
             }
             await sleep(POLL_INTERVAL_MS);
@@ -306,30 +331,16 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           // 操作前は音声文脈を作らない。遅延生成の確認であり、無操作時との差の起点にする。
           const baselineContexts = await page.evaluate(() => window.__contextCount());
 
-          // 外れていれば右へ刻み移動して当てる。当たれば到達とみなし、
-          // 音の成分で対象の正しさを検出する。
-          let aimedHit = initialHit;
-          let strafeBursts = 0;
-          if (!aimedHit) {
-            for (let burst = 0; burst < STRAFE_MAX_BURSTS; burst += 1) {
-              await page.keyboard.down('d');
-              await sleep(STRAFE_BURST_MS);
-              await page.keyboard.up('d');
-              await sleep(STRAFE_SETTLE_MS);
-              strafeBursts += 1;
-              const hit = await page.evaluate(() => window.__crosshairActive());
-              if (hit === true) {
-                aimedHit = true;
-                break;
-              }
-            }
-          }
-          await sleep(500);
-          const settledHit = await page.evaluate(() => window.__crosshairActive());
-          aimedHit = aimedHit && settledHit === true;
+          // 常時表示の確認用にスポーン地点からの画面を残す。
+          await sleep(1000);
+          const evidenceDir = fileURLToPath(
+            new URL('../../tmp/harmonic-interact-capture/', import.meta.url),
+          );
+          await mkdir(evidenceDir, { recursive: true });
+          const stamp = new Date().toISOString().replace(/:/g, '-');
+          await page.screenshot({ path: `${evidenceDir}cubes-label-${stamp}.png` });
 
-          // 一操作目（単声）。中央への信頼済み押下で操作口を駆動する。
-          // 信頼済みかどうかの記録は最後にまとめて読む。
+          // 中央への信頼済み押下で操作口を駆動する。
           // 押下の保持は短くし、減衰の読みが押下時間に埋もれないようにする。
           const clickAtCenter = async (): Promise<void> => {
             await page.mouse.move(400, 300);
@@ -361,19 +372,165 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           };
           const levelDbOf = (frequencyHz: number): Promise<number> =>
             page.evaluate((frequency) => window.__levelDb(frequency, 0), frequencyHz);
+          const readLevels = async (): Promise<{
+            base: number;
+            harmonic: number;
+            fifth: number;
+            third: number;
+            seventh: number;
+          }> => {
+            await page.evaluate(() => window.__setFftSize(16384));
+            await sleep(500);
+            return {
+              base: await levelDbOf(BASE_HZ),
+              harmonic: await levelDbOf(HARMONIC_HZ),
+              fifth: await levelDbOf(FIFTH_HZ),
+              third: await levelDbOf(THIRD_HZ),
+              seventh: await levelDbOf(SEVENTH_HZ),
+            };
+          };
+          const identifyChord = (levels: {
+            base: number;
+            fifth: number;
+            third: number;
+            seventh: number;
+          }): SweepChordKind | null => {
+            const hasFifth = levels.fifth > PRESENT_DB_MIN;
+            const hasThird = levels.third > PRESENT_DB_MIN;
+            const hasSeventh = levels.seventh > PRESENT_DB_MIN;
+            if (hasThird && hasFifth) {
+              return 'triad';
+            }
+            if (hasFifth) {
+              return 'fifth';
+            }
+            if (hasSeventh) {
+              return 'seventh';
+            }
+            if (levels.base > PRESENT_DB_MIN) {
+              return 'single';
+            }
+            return null;
+          };
+          const strafe = async (key: 'a' | 'd'): Promise<void> => {
+            await page.keyboard.down(key);
+            await sleep(SWEEP_BURST_MS);
+            await page.keyboard.up(key);
+            await sleep(SWEEP_SETTLE_MS);
+          };
 
-          await clickAtCenter();
-          await sleep(200);
-          let toneRms = await waitForTone();
-          // 採取窓が信号で満たされてから測る。
-          await sleep(400);
-          toneRms = await readRms();
-          const tonePeak = await page.evaluate(() => window.__peak(0));
-          const contextStatesAfterFirst = await page.evaluate(() => window.__contextStates());
-          const singleBaseDb = await levelDbOf(SINGLE_BASE_HZ);
-          const singleHarmonicDb = await levelDbOf(SINGLE_HARMONIC_HZ);
-          const fifthAbsentDb = await levelDbOf(FIFTH_SECOND_HZ);
+          // スポーン地点の照準は Cube 間の隙間であり、すぐ左に五度・単声、
+          // 右に戻れば長三和音・七度がある。遠くへ外さず近傍だけを移動する。
+          // 当たった Cube は調べて止め、外れを挟んで離れたことを確かめてから
+          // 次を探す。同じ Cube への連打にならない。
+          const investigateHit = async (): Promise<{
+            kind: SweepChordKind | null;
+            toneRms: number;
+            levels: {
+              base: number;
+              harmonic: number;
+              fifth: number;
+              third: number;
+              seventh: number;
+            } | null;
+          }> => {
+            await clickAtCenter();
+            await sleep(200);
+            const toneRms = await waitForTone();
+            if (toneRms < TONE_RMS_MIN) {
+              return { kind: null, toneRms, levels: null };
+            }
+            await sleep(400);
+            const levels = await readLevels();
+            return { kind: identifyChord(levels), toneRms, levels };
+          };
+          const stopSound = async (toneRms: number): Promise<void> => {
+            await page.evaluate(() => window.__setFftSize(4096));
+            await sleep(300);
+            await clickAtCenter();
+            await waitForStopped(toneRms);
+            await page.evaluate(() => window.__setFftSize(16384));
+            await sleep(500);
+          };
 
+          const leftOrder: SweepChordKind[] = [];
+          const rightOrder: SweepChordKind[] = [];
+          const perChordLevels: Array<{
+            kind: SweepChordKind;
+            base: number;
+            harmonic: number;
+            fifth: number;
+            third: number;
+            seventh: number;
+          }> = [];
+          const foundKinds = new Set<SweepChordKind>();
+          let sweepBursts = 0;
+          let settledHit = false;
+          // 直前の Cube から外れたことを表す。外れなく次の当たりを調べない。
+          let leftCube = true;
+          // 左へ進み、五度・単声の順に見つける。
+          for (let burst = 0; burst < SWEEP_LEFT_MAX_BURSTS && leftOrder.length < 2; burst += 1) {
+            await strafe('a');
+            sweepBursts += 1;
+            const hit = await page.evaluate(() => window.__crosshairActive());
+            if (hit !== true) {
+              leftCube = true;
+              continue;
+            }
+            if (!leftCube) {
+              continue;
+            }
+            leftCube = false;
+            settledHit = true;
+            const investigated = await investigateHit();
+            if (investigated.kind === null || investigated.levels === null) {
+              continue;
+            }
+            if (!foundKinds.has(investigated.kind)) {
+              foundKinds.add(investigated.kind);
+              leftOrder.push(investigated.kind);
+              perChordLevels.push({ kind: investigated.kind, ...investigated.levels });
+            }
+            await stopSound(investigated.toneRms);
+          }
+          // 右へ折り返し、長三和音・七度の順に見つける。左で見つけた集合への
+          // 再操作は止めて進み、最後の七度だけを鳴らしたままにする。
+          // 照準は止めた単声の上にあるため、外れてから次を探す。
+          leftCube = false;
+          for (
+            let burst = 0;
+            burst < SWEEP_RIGHT_MAX_BURSTS && rightOrder.length < 2;
+            burst += 1
+          ) {
+            await strafe('d');
+            sweepBursts += 1;
+            const hit = await page.evaluate(() => window.__crosshairActive());
+            if (hit !== true) {
+              leftCube = true;
+              continue;
+            }
+            if (!leftCube) {
+              continue;
+            }
+            leftCube = false;
+            settledHit = true;
+            const investigated = await investigateHit();
+            if (investigated.kind === null || investigated.levels === null) {
+              continue;
+            }
+            if (foundKinds.has(investigated.kind)) {
+              await stopSound(investigated.toneRms);
+              continue;
+            }
+            foundKinds.add(investigated.kind);
+            rightOrder.push(investigated.kind);
+            perChordLevels.push({ kind: investigated.kind, ...investigated.levels });
+            if (rightOrder.length < 2) {
+              await stopSound(investigated.toneRms);
+            }
+          }
+
+          // 七度は鳴らしたまま、停止・減衰・無重複の時系列を判定する。
           // 包絡の時間追跡に切り替え、持続の平均を求める。
           await page.evaluate(() => window.__setFftSize(4096));
           await sleep(300);
@@ -387,13 +544,15 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
             sustainMean += sample;
           }
           sustainMean /= sustainSamples.length;
+          // 時系列の頂上は発音中の窓で測る。停止後に測ると無音窓になる。
+          const tonePeak = await page.evaluate(() => window.__peak(0));
 
-          // 二操作目（ノートオフ）。減衰の予約であり、直後は跳ね上がらない。
+          // 同一 Cube の再操作（ノートオフ）。減衰の予約であり、直後は跳ね上がらない。
           // 減衰（0.3秒）の中に読みを収める。
           await clickAtCenter();
           await sleep(40);
           const releaseFirstRms = await readRms();
-          // 減衰中の三操作目は次の和音を重ねない。無視されれば減衰が単調に進む。
+          // 減衰中の再操作は次の和音を重ねない。無視されれば減衰が単調に進む。
           await sleep(50);
           await clickAtCenter();
           await sleep(40);
@@ -402,26 +561,72 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           const releaseMidRms = await readRms();
           const stoppedRms = await waitForStopped(sustainMean);
 
-          // 減衰完了後の四操作目（次の和音）。五度の第二声が現れ、組合せが進む。
+          // 切替の判定。四つ目を鳴らし直し、発音中に左隣の Cube を操作する。
+          // 別 Cube の操作は現音への減衰の予約であり、全声の終了後に選択した
+          // 集合が自動開始する。重ねないし、即時切断もしない。
           await page.evaluate(() => window.__setFftSize(16384));
           await sleep(500);
           await clickAtCenter();
-          const fifthRms = await waitForTone();
+          const switchBaseRms = await waitForTone();
           await sleep(400);
-          const fifthSettledRms = await readRms();
-          const fifthBaseDb = await levelDbOf(SINGLE_BASE_HZ);
-          const fifthSecondDb = await levelDbOf(FIFTH_SECOND_HZ);
+          // 左隣へ確実に移る。七度を離れた後に当たった面が切替先である。
+          // 照準は鳴らし直した七度の上にあるため、外れてから探す。
+          leftCube = false;
+          let switched = false;
+          for (let burst = 0; burst < SWITCH_MAX_BURSTS; burst += 1) {
+            await strafe('a');
+            sweepBursts += 1;
+            const hit = await page.evaluate(() => window.__crosshairActive());
+            if (hit !== true) {
+              leftCube = true;
+              continue;
+            }
+            if (!leftCube) {
+              continue;
+            }
+            await clickAtCenter();
+            switched = true;
+            break;
+          }
+          // 切替先（長三和音）の目印である中声の出現を待つ。
+          const switchStart = Date.now();
+          let switchedThirdDb = await levelDbOf(THIRD_HZ);
+          while (switchedThirdDb < PRESENT_DB_MIN && Date.now() - switchStart < SWITCH_TIMEOUT_MS) {
+            await sleep(POLL_INTERVAL_MS);
+            switchedThirdDb = await levelDbOf(THIRD_HZ);
+          }
+          // 採取窓（16384標本≒341ミリ秒）が切替後の定常音で満たされるまで待つ。
+          await sleep(800);
+          // 待ち後の定常音で測り直す。待ち前の値は立上がり途中の通過点である。
+          switchedThirdDb = await levelDbOf(THIRD_HZ);
+          const switchedRms = await readRms();
+          const switchedPeak = await page.evaluate(() => window.__peak(0));
+          const switchedBaseDb = await levelDbOf(BASE_HZ);
+          const switchedFifthDb = await levelDbOf(FIFTH_HZ);
+          const switchedSeventhDb = await levelDbOf(SEVENTH_HZ);
           const clickTrusted = await page.evaluate(() => window.__mousedownTrusted);
-          const contextStatesAfterFifth = await page.evaluate(() => window.__contextStates());
+          const contextStates = await page.evaluate(() => window.__contextStates());
+          const contextCount = await page.evaluate(() => window.__contextCount());
+          const tapCount = await page.evaluate(() => window.__tapCount());
+          // 切替後の発音中の画面を残す。常時表示の可読性の証拠にする。
+          await page.screenshot({ path: `${evidenceDir}cubes-playing-${stamp}.png` });
 
+          const levelByKind = (
+            kind: SweepChordKind,
+          ): { base: number; harmonic: number; fifth: number; third: number; seventh: number } | undefined =>
+            perChordLevels.find((measured) => measured.kind === kind);
+          const single = levelByKind('single');
+          const fifth = levelByKind('fifth');
+          const triad = levelByKind('triad');
+          const seventh = levelByKind('seventh');
           const operationLog: InteractOperationLog = {
-            initialHit,
-            strafeBursts,
-            aimedHit,
+            sweepBursts,
+            leftOrder,
+            rightOrder,
             clickTrusted,
           };
           const evidence = {
-            scenario: 'harmonic-interact-capture',
+            scenario: 'harmonic-interact-capture-4cubes',
             environment: {
               browser: `chromium/${version}`,
               devUrl,
@@ -429,15 +634,15 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
               autoplayPolicy: 'default(require-gesture)',
               componentFftSize: COMPONENT_FFT_SIZE,
               envelopeFftSize: ENVELOPE_FFT_SIZE,
-              contextStates: {
-                afterFirst: contextStatesAfterFirst,
-                afterFifth: contextStatesAfterFifth,
-              },
+              contextStates,
+              contextCount,
+              tapCount,
               pageErrors: pageErrors.slice(0, 8),
             },
             operation: operationLog,
             thresholds: {
               baselineContextCount: BASELINE_CONTEXT_COUNT,
+              sharedContextCount: SHARED_CONTEXT_COUNT,
               toneRmsMin: TONE_RMS_MIN,
               toneRmsMax: TONE_RMS_MAX,
               tonePeakMax: TONE_PEAK_MAX,
@@ -452,28 +657,24 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
             },
             measurements: {
               baselineContexts,
-              toneRms,
-              tonePeak,
-              singleBaseDb,
-              singleHarmonicDb,
-              fifthAbsentDb,
+              perChordLevels,
               sustainMean,
               releaseFirstRms,
               restrikeRms,
               releaseMidRms,
               stoppedRms,
-              fifthRms,
-              fifthSettledRms,
-              fifthBaseDb,
-              fifthSecondDb,
+              tonePeak,
+              switchBaseRms,
+              switched,
+              switchedRms,
+              switchedPeak,
+              switchedBaseDb,
+              switchedThirdDb,
+              switchedFifthDb,
+              switchedSeventhDb,
             },
             note: '開発環境の音声グラフ内の標本であり、ホスト環境と物理出力の証明にはならない',
           };
-          const evidenceDir = fileURLToPath(
-            new URL('../../tmp/harmonic-interact-capture/', import.meta.url),
-          );
-          await mkdir(evidenceDir, { recursive: true });
-          const stamp = new Date().toISOString().replace(/:/g, '-');
           await writeFile(
             `${evidenceDir}capture-${stamp}-chromium.json`,
             `${JSON.stringify(evidence, null, 2)}\n`,
@@ -481,26 +682,43 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await page.close();
 
           // 操作前は無音（文脈なし）であり、操作起点で文脈が生まれること。
-          // 生成直後の当たり外れは記録だけし、到達の合否は移動後の照準で判定する。
           expect(baselineContexts).toBe(BASELINE_CONTEXT_COUNT);
-          expect(aimedHit).toBe(true);
+          // 近傍の移動で4 Cube に照準を合わせられること。左へ進んで五度・
+          // 単声の順に、右へ戻って長三和音・七度の順に見つける。
+          expect(settledHit).toBe(true);
+          expect(leftOrder).toEqual([...EXPECTED_LEFT_ORDER]);
+          expect(rightOrder).toEqual([...EXPECTED_RIGHT_ORDER]);
           // 全操作が信頼済み入力であり、文脈は操作由来の再開で動くこと。
-          expect(clickTrusted.length).toBeGreaterThanOrEqual(4);
+          expect(clickTrusted.length).toBeGreaterThanOrEqual(6);
           for (const trusted of clickTrusted) {
             expect(trusted).toBe(true);
           }
-          expect(contextStatesAfterFirst).toContain('running');
-          // 一操作目の単声：非無音かつ過大でなく、狙った成分を持つこと。
-          // 第二声の基音が底に落ちることで単声であること、倍音があることで
+          expect(contextStates).toContain('running');
+          // 4 Cube で1つの文脈と1つの採取口を共有すること。
+          expect(contextCount).toBe(SHARED_CONTEXT_COUNT);
+          expect(tapCount).toBe(SHARED_CONTEXT_COUNT);
+          // 単声：非無音かつ過大でなく、狙った成分を持つこと。
+          // 五度の基音が底に落ちることで単声であること、倍音があることで
           // 調波の操作であること。
-          expect(toneRms).toBeGreaterThan(TONE_RMS_MIN);
-          expect(toneRms).toBeLessThan(TONE_RMS_MAX);
-          expect(tonePeak).toBeLessThan(TONE_PEAK_MAX);
-          expect(singleBaseDb).toBeGreaterThan(PRESENT_DB_MIN);
-          expect(singleHarmonicDb).toBeGreaterThan(PRESENT_DB_MIN);
-          expect(fifthAbsentDb).toBeLessThan(ABSENT_DB_MAX);
-          expect(singleBaseDb - fifthAbsentDb).toBeGreaterThan(ABSENT_DROP_DB_MIN);
-          // 二操作目の減衰：直後は跳ね上がらないこと。
+          expect(single?.base).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(single?.harmonic).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(single?.fifth).toBeLessThan(ABSENT_DB_MAX);
+          expect((single?.base ?? 0) - (single?.fifth ?? 0)).toBeGreaterThan(ABSENT_DROP_DB_MIN);
+          // 五度：基音と五度の声を持ち、中声は底に落ちること。
+          expect(fifth?.base).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(fifth?.fifth).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(fifth?.third).toBeLessThan(ABSENT_DB_MAX);
+          expect((fifth?.base ?? 0) - (fifth?.third ?? 0)).toBeGreaterThan(ABSENT_DROP_DB_MIN);
+          // 長三和音：三つの声の基音を持つこと。
+          expect(triad?.base).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(triad?.third).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(triad?.fifth).toBeGreaterThan(PRESENT_DB_MIN);
+          // 七度：基音と七度の声を持ち、五度は底に落ちること。
+          expect(seventh?.base).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(seventh?.seventh).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(seventh?.fifth).toBeLessThan(ABSENT_DB_MAX);
+          expect((seventh?.base ?? 0) - (seventh?.fifth ?? 0)).toBeGreaterThan(ABSENT_DROP_DB_MIN);
+          // 同一 Cube の再操作の減衰：直後は跳ね上がらないこと。
           expect(sustainMean).toBeGreaterThan(SUSTAIN_RMS_MIN);
           expect(releaseFirstRms).toBeLessThan(sustainMean * RELEASE_FIRST_RATIO_MAX);
           // 減衰中の再操作は次の和音を重ねず、減衰が単調に進むこと。
@@ -517,11 +735,18 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           expect(restrikeRms).toBeGreaterThan(stoppedRms);
           expect(stoppedRms).toBeLessThan(STOPPED_RMS_MAX);
           expect(stoppedRms).toBeLessThan(sustainMean * STOPPED_RMS_RATIO_MAX);
-          // 減衰完了後の再操作で次の和音（五度）へ進むこと。
-          expect(fifthSettledRms).toBeGreaterThan(TONE_RMS_MIN);
-          expect(fifthBaseDb).toBeGreaterThan(PRESENT_DB_MIN);
-          expect(fifthSecondDb).toBeGreaterThan(PRESENT_DB_MIN);
-          expect(contextStatesAfterFifth).toContain('running');
+          expect(tonePeak).toBeLessThan(TONE_PEAK_MAX);
+          // 別 Cube の操作で減衰完了後に切替先（長三和音）が鳴ること。
+          // 七度の声は消え、中声と五度が現れる。重ねたままでは七度が残る。
+          expect(switched).toBe(true);
+          expect(switchBaseRms).toBeGreaterThan(TONE_RMS_MIN);
+          expect(switchedRms).toBeGreaterThan(TONE_RMS_MIN);
+          expect(switchedRms).toBeLessThan(TONE_RMS_MAX);
+          expect(switchedPeak).toBeLessThan(TONE_PEAK_MAX);
+          expect(switchedBaseDb).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(switchedThirdDb).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(switchedFifthDb).toBeGreaterThan(PRESENT_DB_MIN);
+          expect(switchedSeventhDb).toBeLessThan(ABSENT_DB_MAX);
         } finally {
           await browser.close();
           if (server !== null) {

@@ -9,12 +9,17 @@
  */
 
 import { HARMONIC_PRESETS, type HarmonicPreset } from '../../audio/harmonicPresets';
-import type { HarmonicRatioInput } from '../../audio/harmonicRatio';
+import { normalizeHarmonicRatio, type HarmonicRatioInput } from '../../audio/harmonicRatio';
 
 /**
  * 一つの聴き比べ単位。音色と比率集合の組合せだけを表す。
  */
 export interface HarmonicChordSet {
+  /**
+   * Cube の選択 ID。4 件で重ならず、操作側が選択の対応付けに使う。
+   * 表示名とは別にし、文言の変更で対応がずれないようにする。
+   */
+  readonly id: string;
   /** 表示名。操作部品の表示にそのまま使う。 */
   readonly name: string;
   /** 鳴らす音色。全声に共通。 */
@@ -36,11 +41,13 @@ function findPreset(name: string): HarmonicPreset {
  */
 export const HARMONIC_CHORD_SETS: readonly HarmonicChordSet[] = [
   {
+    id: 'single-neutral',
     name: '単声 Neutral',
     preset: findPreset('Neutral Harmonic'),
     ratios: [{ numerator: 1, denominator: 1 }],
   },
   {
+    id: 'fifth-low-limit',
     name: '五度 Low-Limit',
     preset: findPreset('Low-Limit Pure'),
     ratios: [
@@ -49,6 +56,7 @@ export const HARMONIC_CHORD_SETS: readonly HarmonicChordSet[] = [
     ],
   },
   {
+    id: 'major-triad-neutral',
     name: '長三和音 Neutral',
     preset: findPreset('Neutral Harmonic'),
     ratios: [
@@ -58,6 +66,7 @@ export const HARMONIC_CHORD_SETS: readonly HarmonicChordSet[] = [
     ],
   },
   {
+    id: 'seventh-septimal',
     name: '七度 Septimal',
     preset: findPreset('Septimal'),
     ratios: [
@@ -66,3 +75,21 @@ export const HARMONIC_CHORD_SETS: readonly HarmonicChordSet[] = [
     ],
   },
 ];
+
+/**
+ * 比率集合を常時表示用の短い1行にする（例: `1/1 5/4 3/2`）。
+ *
+ * 素数次元表示の入力は声の識別と同じ正規化で有理比へ直してから並べる。
+ * 表示の順序は声の低い順に従う。
+ *
+ * @param ratios - 音程比の集合。
+ * @returns 空白区切りの比率列。空の集合には空文字を返す。
+ */
+export function formatHarmonicRatioLabel(ratios: readonly HarmonicRatioInput[]): string {
+  if (ratios.length === 0) {
+    return '';
+  }
+  const normalized = ratios.map((ratio) => normalizeHarmonicRatio(ratio));
+  normalized.sort((first, second) => first.numerator / first.denominator - second.numerator / second.denominator);
+  return normalized.map((ratio) => `${ratio.numerator}/${ratio.denominator}`).join(' ');
+}

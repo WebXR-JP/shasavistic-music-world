@@ -25,6 +25,7 @@ import {
   createHarmonicToneContext,
   createHarmonicToneSession,
   type HarmonicToneContext,
+  type HarmonicToneOscillator,
   type HarmonicToneSession,
 } from './harmonicTone';
 
@@ -118,6 +119,19 @@ export interface HarmonicChordSession {
    */
   noteOff(): void;
   /**
+   * 全声の終了を待つ（使い捨ての待機口）。
+   *
+   * 既存の声の終了処理（各声の減衰終了時の所有照合による切断）を正本とし、
+   * 固定時間の待ちは行わない。待機中に全声が終われば解決し、呼び出し時点で
+   * 既に静止（発音も減衰も起動待ちもなし）なら即時に解決する。破棄後は
+   * 声が残らないため即時に解決する。
+   *
+   * @remarks
+   * 常設の購読口は作らず、呼び出しごとの使い捨てとする。複数の待機は
+   * すべて同じ終了で解決する。停止や起動の取消しで静止に戻った場合も解決する。
+   */
+  waitForAllVoicesEnded(): Promise<void>;
+  /**
    * 和音を減衰を待たずに止める（緊急の中断）。
    *
    * @remarks
@@ -160,12 +174,97 @@ export function createHarmonicChordSession(
   let pendingGeneration = -1;
   let disposePromise: Promise<void> | null = null;
   let contextClosed = false;
+  // 全声終了の使い捨て待機の解決口。常設の購読口は作らず、終了のたびに空にする。
+  let idleWaiters: Array<() => void> = [];
 
   const stopVoices = (targets: readonly HarmonicToneSession[]): void => {
     for (const voice of targets) {
       voice.stop();
     }
   };
+
+  // 声が一つも残らなければ待機をすべて解決する。起動の完了待ちがある間は
+  // 静止とみなさない。古い声の遅延終了は全体の静止検査で吸収し、後続の声が
+  // 鳴っている間は解決しない。
+  const notifyIfIdle = (): void => {
+    if (pending !== null) {
+      return;
+    }
+    if (voices.some((voice) => voice.playing) || voices.some((voice) => voice.releasing)) {
+      return;
+    }
+    if (idleWaiters.length === 0) {
+      return;
+    }
+    const waiters = idleWaiters;
+    idleWaiters = [];
+    for (const resolve of waiters) {
+      resolve();
+    }
+  };
+
+  // 声の終了通知を和音側の待機へつなぐ読み替え。単音側の所有照合による切断は
+  // そのまま保ち、後始末の完了後に全体の静止だけを確かめる。寿命（close）は
+  // 和音側が担い、ここでは触れない。
+  const wrapContextForIdle = (base: HarmonicToneContext): HarmonicToneContext => ({
+    destination: base.destination,
+    sampleRate: base.sampleRate,
+    get currentTime(): number {
+      return base.currentTime;
+    },
+    get state(): string {
+      return base.state;
+    },
+    resume: (): Promise<void> => base.resume(),
+    close: (): Promise<void> => base.close(),
+    createPeriodicWave: (
+      real: Float32Array,
+      imag: Float32Array,
+      constraints: { disableNormalization: boolean },
+    ): object => base.createPeriodicWave(real, imag, constraints),
+    createGain: () => base.createGain(),
+    createOscillator: (): HarmonicToneOscillator => {
+      const inner = base.createOscillator();
+      let userHandler: (() => void) | null = null;
+      const port: HarmonicToneOscillator = {
+        frequency: inner.frequency,
+        get onended(): (() => void) | null {
+          return userHandler;
+        },
+        set onended(handler: (() => void) | null) {
+          userHandler = handler;
+          if (handler === null) {
+            inner.onended = null;
+          } else {
+            const active: () => void = handler;
+            inner.onended = (): void => {
+              try {
+                active();
+              } finally {
+                notifyIfIdle();
+              }
+            };
+          }
+        },
+        setPeriodicWave: (wave: object): void => {
+          inner.setPeriodicWave(wave);
+        },
+        connect: (target: object): void => {
+          inner.connect(target);
+        },
+        disconnect: (): void => {
+          inner.disconnect();
+        },
+        start: (): void => {
+          inner.start();
+        },
+        stop: (when?: number): void => {
+          inner.stop(when);
+        },
+      };
+      return port;
+    },
+  });
 
   const session: HarmonicChordSession = {
     get playing(): boolean {
@@ -209,8 +308,10 @@ export function createHarmonicChordSession(
       // 文脈の生成口は共有文脈を返すだけにし、寿命（close）は和音側が担う。
       // 単音側の破棄口は文脈を閉じるため、和音側の停止と破棄では使わない。
       // 声と周波数の対応付けは添字ではなく束で持ち、取り違えない。
+      // 発振器の終了通知だけを待機へつなぐ読み替えを挟み、声の所有と寿命は変えない。
+      const voiceContext = wrapContextForIdle(activeContext);
       const nextPairs = resolved.map((voice) => ({
-        session: createHarmonicToneSession(() => activeContext),
+        session: createHarmonicToneSession(() => voiceContext),
         frequency: voice.frequency,
       }));
       const nextVoices = nextPairs.map((pair) => pair.session);
@@ -237,6 +338,7 @@ export function createHarmonicChordSession(
           // 失敗した声以外が残ると重なって鳴るため、取り消しと失敗のいずれでも止める。
           // 取り消された起動は失敗として扱わず、静かに終える。
           stopVoices(nextVoices);
+          notifyIfIdle();
           if (myGeneration !== generation || disposed) {
             return;
           }
@@ -247,11 +349,13 @@ export function createHarmonicChordSession(
             pending = null;
           }
           stopVoices(nextVoices);
+          notifyIfIdle();
           return;
         }
         if (pending === task) {
           pending = null;
         }
+        notifyIfIdle();
         // 発音中の有無は各声が持つ。停止で外れていれば世代が進むためここには届かない。
       })();
       pending = task;
@@ -276,6 +380,18 @@ export function createHarmonicChordSession(
       generation += 1;
       // 声だけを外し、文脈は操作口の存続中は保つ。
       stopVoices(voices);
+      notifyIfIdle();
+    },
+    waitForAllVoicesEnded(): Promise<void> {
+      if (disposed) {
+        return Promise.resolve();
+      }
+      if (pending === null && !session.playing && !session.releasing) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        idleWaiters.push(resolve);
+      });
     },
     async dispose(): Promise<void> {
       if (disposePromise !== null) {
@@ -284,6 +400,14 @@ export function createHarmonicChordSession(
       disposed = true;
       generation += 1;
       stopVoices(voices);
+      // 破棄で声は止まるため、残っている終了待機を解決する。
+      if (idleWaiters.length > 0) {
+        const waiters = idleWaiters;
+        idleWaiters = [];
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
       if (shared === null || contextClosed) {
         disposePromise = Promise.resolve();
         return disposePromise;

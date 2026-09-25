@@ -73,8 +73,9 @@ export const World: React.FC<WorldProps> = ({ position = [0, 0, 0], scale = 1 })
         <SpawnPoint />
       </group>
 
-      {/* ========== 調波シンセの操作口（音色と比率集合の聴き比べ） ========== */}
-      <HarmonicSwitch position={[1.5, 1.5, 6]} />
+      {/* ========== 調波シンセの操作口（4 Cube による和音集合の選択） ========== */}
+      {/* 開発環境の中央光線の到達距離（3.5m）に収める。スポーンからの距離は約3m。 */}
+      <HarmonicSwitch position={[0, 1.3, 5]} />
     </group>
   )
 }

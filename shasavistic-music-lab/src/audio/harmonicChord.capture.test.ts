@@ -27,6 +27,7 @@ import { chromium } from 'playwright-core';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { HarmonicChordSession } from './harmonicChord';
+import { HARMONIC_ENVELOPE_DEFAULTS } from './harmonicEnvelope';
 import { HARMONIC_PRESETS, type HarmonicPreset } from './harmonicPresets';
 import type { HarmonicRatioInput } from './harmonicRatio';
 import type { HarmonicToneContext } from './harmonicTone';
@@ -45,6 +46,12 @@ const CAPTURE_POLL_INTERVAL_MS = 100;
 
 /** 包絡の時系列を追う間隔（ミリ秒）。 */
 const ENVELOPE_SAMPLE_INTERVAL_MS = 50;
+
+/** 持続区間の開始余裕（秒）。減衰完了（アタック＋ディケイ）後の標本だけを使う。 */
+const ENVELOPE_SUSTAIN_MARGIN_S = 0.1;
+
+/** 持続区間の採取幅（秒）。減衰完了＋余裕からこの幅だけ音声時刻が進むまで追う。 */
+const ENVELOPE_SUSTAIN_COVER_S = 0.4;
 
 /** 開始後の信号の出現を待つ上限（ミリ秒）。描画の遅れを吸収するための待ちであり合否ではない。 */
 const TONE_TIMEOUT_MS = 6000;
@@ -150,6 +157,10 @@ interface EnvelopeMeasurements {
   readonly stopPolls: number;
   readonly playingAfterRelease: boolean;
   readonly releasingAfterRelease: boolean;
+  /** 持続区間の音声時刻に到達したか。未達でも標本は返し、合否は検査側が決める。 */
+  readonly settleReached: boolean;
+  /** 音声時刻付きで採取した標本数。 */
+  readonly timedSamples: number;
 }
 
 /** 成分の採取でブラウザへ渡す入力。採取条件は検査側の正本から一つだけ渡す。 */
@@ -177,7 +188,11 @@ interface EnvelopeCaptureInput {
   readonly ratios: readonly HarmonicRatioInput[];
   readonly fftSize: number;
   readonly sampleIntervalMs: number;
-  readonly seriesSamples: number;
+  readonly attackTimeS: number;
+  readonly decayTimeS: number;
+  readonly sustainMarginS: number;
+  readonly sustainCoverS: number;
+  readonly settleTimeoutMs: number;
   readonly pollIntervalMs: number;
   readonly stopTimeoutMs: number;
   readonly stoppedRmsMax: number;
@@ -435,8 +450,13 @@ async function captureComponentsInPage(
 /**
  * 和音の包絡の時系列を採取する手順。
  *
- * 立ち上がりの途中から持続までを等間隔で追い、ノートオフ後の減衰と消音への
+ * 立ち上がりの途中から持続までを追い、ノートオフ後の減衰と消音への
  * 推移を同じ採取口で測る。外側の変数は掴まない。合否は検査側が決める。
+ *
+ * 各標本に音声時刻を添え、立ち上がり・持続の区間を音声時刻で選ぶ。
+ * 壁時計の固定回数だけでは負荷時の描画遅れで減衰前の区間を取り違えるため、
+ * 持続区間の音声時刻に進むまで期限付きで追う。期限内の到達可否は標本として
+ * 返し、合否は検査側が決める。
  *
  * @param input - 実コードの変換結果と採取条件。
  * @returns 採取した標本。
@@ -555,32 +575,58 @@ async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<Envel
     });
 
   const session = chordModule.createHarmonicChordSession(createContext);
+  // 発音開始の音声時刻を掴む。予約はこの直後の現在時刻を基準に行われる。
+  const noteOnAudioTime = context.currentTime;
   await session.start({
     baseFrequency: input.baseFrequency,
     preset: input.preset,
     ratios: input.ratios,
   });
-  // 立ち上がりの途中（アタックの完了前）の読み。
-  await sleep(input.sampleIntervalMs);
-  const earlyRms = rmsOf();
-  // 立ち上がりと減衰を横断して持続まで追う時系列。
-  const series: number[] = [];
-  for (let index = 0; index < input.seriesSamples; index += 1) {
+  // 立ち上がりと減衰を音声時刻で横断して持続まで追う時系列。
+  const sustainStart = input.attackTimeS + input.decayTimeS;
+  const timed: Array<{ audioTime: number; rms: number }> = [];
+  const sampleStartWall = Date.now();
+  let settleReached = false;
+  while (Date.now() - sampleStartWall < input.settleTimeoutMs) {
     await sleep(input.sampleIntervalMs);
-    series.push(rmsOf());
+    const sample = { audioTime: context.currentTime - noteOnAudioTime, rms: rmsOf() };
+    timed.push(sample);
+    if (sample.audioTime >= sustainStart + input.sustainCoverS) {
+      settleReached = true;
+      break;
+    }
   }
+  // 立ち上がりの途中（アタックの半ば）に最も近い標本を早期読みとする。
+  const earlyTarget = input.attackTimeS / 2;
+  let earlyRms = timed[0]?.rms ?? 0;
+  let earlyDistance = Number.POSITIVE_INFINITY;
+  for (const sample of timed) {
+    const distance = Math.abs(sample.audioTime - earlyTarget);
+    if (distance < earlyDistance) {
+      earlyDistance = distance;
+      earlyRms = sample.rms;
+    }
+  }
+  const series = timed.map((sample) => sample.rms);
   let peakRms = 0;
   for (const value of series) {
     if (value > peakRms) {
       peakRms = value;
     }
   }
-  const sustainSamples = series.slice(-4);
+  // 持続は減衰完了＋余裕より後の標本だけを使う。区間に届かなければ
+  // 末尾の標本で代え、持続の低さとして検査側の判定に掛ける。
+  const sustainRegion = timed.filter(
+    (sample) => sample.audioTime >= sustainStart + input.sustainMarginS,
+  );
+  const sustainSource =
+    sustainRegion.length > 0 ? sustainRegion.slice(-4) : timed.slice(-4);
+  const sustainSamples = sustainSource.map((sample) => sample.rms);
   let sustainMean = 0;
   for (const value of sustainSamples) {
     sustainMean += value;
   }
-  sustainMean /= sustainSamples.length;
+  sustainMean /= sustainSamples.length > 0 ? sustainSamples.length : 1;
   let sustainMaxDeviation = 0;
   for (const value of sustainSamples) {
     const deviation = Math.abs(value - sustainMean);
@@ -589,10 +635,22 @@ async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<Envel
     }
   }
   const stateAtTone = context.state;
+  const noteOffAudioTime = context.currentTime;
   session.noteOff();
-  await sleep(input.sampleIntervalMs);
+  // 減衰の読みも音声時刻の進行で確かめる。壁時計だけでは描画遅れで
+  // 減衰前の標本を直後読みに混ぜるため、期限付きで進行を待つ。
+  const waitAudioAdvance = async (fromAudioTime: number, advanceS: number): Promise<void> => {
+    const waitStart = Date.now();
+    while (
+      context.currentTime - fromAudioTime < advanceS &&
+      Date.now() - waitStart < input.settleTimeoutMs
+    ) {
+      await sleep(input.pollIntervalMs);
+    }
+  };
+  await waitAudioAdvance(noteOffAudioTime, input.sampleIntervalMs / 1000);
   const releaseFirstRms = rmsOf();
-  await sleep(input.sampleIntervalMs * 3);
+  await waitAudioAdvance(noteOffAudioTime, (input.sampleIntervalMs * 4) / 1000);
   const releaseMidRms = rmsOf();
   let stoppedRms = rmsOf();
   let stopPolls = 0;
@@ -629,6 +687,8 @@ async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<Envel
     stopPolls,
     playingAfterRelease,
     releasingAfterRelease,
+    settleReached,
+    timedSamples: timed.length,
   };
 }
 
@@ -838,7 +898,11 @@ describe('和音の音声信号採取', () => {
             ratios: [...CHORD_RATIOS],
             fftSize: ENVELOPE_FFT_SIZE,
             sampleIntervalMs: ENVELOPE_SAMPLE_INTERVAL_MS,
-            seriesSamples: 16,
+            attackTimeS: HARMONIC_ENVELOPE_DEFAULTS.attackTime,
+            decayTimeS: HARMONIC_ENVELOPE_DEFAULTS.decayTime,
+            sustainMarginS: ENVELOPE_SUSTAIN_MARGIN_S,
+            sustainCoverS: ENVELOPE_SUSTAIN_COVER_S,
+            settleTimeoutMs: TONE_TIMEOUT_MS,
             pollIntervalMs: CAPTURE_POLL_INTERVAL_MS,
             stopTimeoutMs: STOP_TIMEOUT_MS,
             stoppedRmsMax: STOPPED_RMS_MAX,
