@@ -73,12 +73,17 @@
       "operationIds": [],
       "note": ""
     },
-    "switchEmptiesOnSet": {
+    "dimensionSwitchKeepsOnSet": {
       "result": "",
       "operationIds": [],
       "note": ""
     },
-    "reselectInNewDimension": {
+    "dimensionSwitchRevoicesSamePoints": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "theoryIntroVisibleReadable": {
       "result": "",
       "operationIds": [],
       "note": ""
