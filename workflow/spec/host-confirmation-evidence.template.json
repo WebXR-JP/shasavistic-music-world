@@ -27,30 +27,84 @@
   },
   "operation": [
     {
+      "id": "",
       "at": "",
-      "action": "single-sustain | single-noteoff | next-chord | chord-stop",
+      "action": "grid-on",
       "target": "",
+      "direction": "",
+      "stateBefore": "",
+      "stateAfter": "",
       "note": ""
     }
   ],
+  "checks": {
+    "gridDisplay": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "eachPointOnOff": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "polyphonicSoundAndStop": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "moveEightDirections": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "edgeDoesNotMoveWholeSet": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "emptySetMoveMakesNoSound": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "dimensionSwitchStopsOldSound": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "switchEmptiesOnSet": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "reselectInNewDimension": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    }
+  },
+  "hostAudio": {
+    "permissionAndResume": "",
+    "note": ""
+  },
   "capture": {
     "attempted": false,
     "source": "",
     "identified": false,
-    "result": "obtained | target-unidentified | not-attempted",
+    "result": "obtained",
     "measurements": {},
     "note": ""
   },
   "listening": {
     "sameConditions": false,
     "items": {
-      "heardAfterOperation": "pass | fail | unobserved",
-      "sustainReleaseSilence": "pass | fail | unobserved",
-      "singleVsChord": "pass | fail | unobserved",
-      "noCrackleOrDiscomfort": "pass | fail | unobserved"
+      "heardAfterOperation": "",
+      "onOffMoveSwitch": "",
+      "noCrackleOrDiscomfort": ""
     },
     "note": ""
   },
-  "unobserved": [""],
+  "unobserved": [],
   "memo": ""
 }

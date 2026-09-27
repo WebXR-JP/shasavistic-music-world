@@ -6,6 +6,10 @@
 
 要求元は `requirements/intent/shasavistic-music-world.md` とする。要求をここで定め直さない。親設計からは音声処理と操作の分離、および常設診断口を設けない境界を参照する。増分の順序と確認用操作は本設計で選ぶ。プリセットの聴き比べを、要求全体の受入れ条件と同一視しない。
 
+## 適用範囲
+
+この文書は調波シンセの探索増分の方式を扱い、MVP格子の方式は扱わない。MVP格子の操作・音高・発音の正本は `workflow/design/shasavistic-music-lab/pitch-grid.md` とその子に置く。この文書と子に書く排他や重ねない判断は探索増分の範囲であり、現行MVPに適用される制約としない。
+
 ## 確定した判断
 
 初回はブラウザ標準の Web Audio API を用い、音声ライブラリを足さない。依存の追加は許されるが採用は設計判断とする。Tone.js は不採用確定ではなく保留とする。部分音指定で減衰・重み・上限の表現は可能だが、スペクトル計算自体は独自処理が要る。同梱と検査、文脈と声の寿命管理の負担が現時点の利点を上回る。
@@ -42,6 +46,7 @@ Chrome で係数どおりの成分や許容できる音質が得られない場�
 - workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとのエンベロープの方式）
 - workflow/design/shasavistic-music-lab/harmonic-synth/polyphony.md（複数声・比率同時発音の方式）
 - workflow/design/shasavistic-music-lab/harmonic-synth/semantic-chord.md（意味論的和音から発音口への変換の方式の参照先）
+- workflow/design/shasavistic-music-lab/pitch-grid.md（MVP格子の方式の参照先。排他の適用範囲の区切りのため）
 - research/シャサフ式音楽向けシンセサイザー 基本波形設計案.md（候補・根拠。決定の正本にしない）
 - workflow/spec/harmonic-synth-capture.md
 - shasavistic-music-lab/AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md

@@ -1,4 +1,16 @@
-# 調波シンセ：4 Cube による選択と常時表示
+# 調波シンセ：4 Cube による選択と常時表示（廃止）
+
+この文書は廃止済みであり、現行設計として扱わない。廃止範囲は4 Cube排他操作とその4組合せ定義とする。MVP格子の方式は `workflow/design/shasavistic-music-lab/pitch-grid.md` を参照する。以下は廃止時点の記録であり、結論を複製する参照先にしない。
+
+## 廃止の判断
+
+4 Cube による排他聴き比べを製品から外す。理由は、要求の個別オン・オフと集合移動を満たせないためであり、廃止判断の正本は後継のMVP格子文書 `workflow/design/shasavistic-music-lab/pitch-grid.md` に置く。この文書は廃止判断の正本ではなく、適用範囲の区切りは `workflow/design/shasavistic-music-lab/harmonic-synth.md` を参照する。
+
+既存の実装（`shasavistic-music-lab/src/components/HarmonicSwitch/`）と検査（`cubeSwitch.test.ts` を含む）は残す。MVPの製品操作には使わず、回帰対象にもしない。実行経路から外し、MVP操作への誤用を避ける。削除や再利用の判断は実装時に行う。
+
+## 以下は廃止時の本文（参照用に残す）
+
+---
 
 この文書は、親が定める排他（常に一つの和音）のもとで「操作口一つによる巡回」を置き換える、複数の Cube による選択と常時表示の方式を決める。排他とリリース完了まで重ねない判断は変えず、要求を再定義しない。
 
@@ -38,9 +50,11 @@
 
 一次資料の本文確認済み事項として、XRift の共有依存、UIKit の文字と書体、drei Text と Troika の Worker、drei Html、Three.js の CanvasTexture とスプライトを記録する。今回のビルド成果物とホスト表示は未検証とする。
 
-## 参照
+## 参照（以下は廃止時の記録）
 
-判断の正本はこの一枚に置き、親・兄弟・根拠資料へ結論を複製しない。
+廃止時の正本記述であり、現行正本は後継のMVP格子文書 `workflow/design/shasavistic-music-lab/pitch-grid.md` に置く。親・兄弟・根拠資料へ結論を複製しない。
+
+- workflow/design/shasavistic-music-lab/pitch-grid.md（後継のMVP格子方式）
 
 - workflow/design/shasavistic-music-lab/harmonic-synth/polyphony.md（排他と無重複の参照元）
 - workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとの包絡の参照元）
