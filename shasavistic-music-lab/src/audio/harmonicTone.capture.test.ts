@@ -103,6 +103,28 @@ const STOPPED_RMS_RATIO_MAX = 0.1;
 const NOTE_OFF_JUMP_MAX = 0.4;
 
 /**
+ * 途中ノートオフ前の発音出現と認める実効値の下限。
+ *
+ * 基準無音の上限（0.01）の2倍であり、無音との差を明確にする。
+ * 持続平均（約0.08）の4分の1のため、立ち上がり（アタック0.1秒）の
+ * 途中で到達できる。頂上付近の値にするとノートオフがアタック完了後に
+ * ずれ込むため、この水準で検出した直後にノートオフする。
+ */
+const MID_NOTEOFF_ONSET_RMS_MIN = 0.02;
+
+/** 発音出現を確かめる間隔（ミリ秒）。アタックの窓に収めるため短く取る。 */
+const MID_NOTEOFF_ONSET_POLL_MS = 10;
+
+/**
+ * ノートオフ後に直後窓を読むまでの音声時刻の進行（秒）。
+ *
+ * 採取窓（4096点・約93ミリ秒）より短く、接続点を窓の内側に含めたまま
+ * ノートオフ後の信号で窓を更新する。壁時計の固定待ちでは描画遅れで
+ * 減衰前の標本を直後読みに混ぜるため、音声時刻の進行で待つ。
+ */
+const MID_NOTEOFF_POST_ADVANCE_S = 0.02;
+
+/**
  * 必要成分として認める水準の下限（dBFS）。無信号の底より十分に上であること。
  *
  * 持続利得は最大利得の0.7倍（約-3dB）のため、最大基準の-60から測定の余裕を
@@ -170,6 +192,22 @@ interface MidNoteOffMeasurements {
   readonly stopPolls: number;
   readonly playingAfterRelease: boolean;
   readonly releasingAfterRelease: boolean;
+  /** 発音出現を期限内に検出できたか。未達でも標本は返し、合否は検査側が決める。 */
+  readonly onsetReached: boolean;
+  /** 発音出現の確認回数。 */
+  readonly onsetPolls: number;
+  /** ノートオンから発音出現検出までの音声時刻（秒）。 */
+  readonly onsetAudioTimeS: number;
+  /** ノートオンからノートオフまでの音声時刻（秒）。途中かどうかの判定に使う。 */
+  readonly noteOnToNoteOffS: number;
+  /** ノートオフが立ち上がり（アタック）の時間窓を外れたか。外れても標本は返し、合否は検査側が決める。 */
+  readonly windowExceeded: boolean;
+  /** ノートオンから直前読みまでの音声時刻（秒）。接続点の前を覆う確認に使う。 */
+  readonly preAudioTimeS: number;
+  /** ノートオンから直後読みまでの音声時刻（秒）。接続点の後を覆う確認に使う。 */
+  readonly postAudioTimeS: number;
+  /** ノートオンから減衰途中読みまでの音声時刻（秒）。 */
+  readonly midAudioTimeS: number;
 }
 
 /** ブラウザへ渡す入力。採取条件は検査側の正本から一つだけ渡す。 */
@@ -212,8 +250,13 @@ interface MidNoteOffCaptureInput {
   readonly preset: HarmonicPreset;
   readonly frequency: number;
   readonly fftSize: number;
-  readonly noteOffDelayMs: number;
-  readonly midDelayMs: number;
+  readonly onsetRmsMin: number;
+  readonly onsetTimeoutMs: number;
+  readonly onsetPollMs: number;
+  readonly attackTimeS: number;
+  readonly releaseTimeS: number;
+  readonly postAdvanceS: number;
+  readonly settleTimeoutMs: number;
   readonly pollIntervalMs: number;
   readonly stopTimeoutMs: number;
   readonly stoppedRmsMax: number;
@@ -704,6 +747,14 @@ async function captureEnvelopeInPage(input: EnvelopeCaptureInput): Promise<Envel
  * 立ち上がりの途中でノートオフし、直後の窓の段差と減衰の推移を測る。
  * 外側の変数は掴まない。合否は検査側が決める。
  *
+ * ノートオンからの音声時刻と短間隔の実効値を記録し、基準無音を明確に
+ * 上回る信号が現れた場合だけノートオフする。壁時計の固定待ちでは描画の
+ * 遅れと競合して立ち上がりに間に合わず無音を採取するため、期限付きで
+ * 信号の出現を確かめる。出現が立ち上がり（アタック）の時間窓を外れた
+ * 場合は成功に読み替えず、到達可否と時間窓超過を標本として返す。
+ * 減衰途中の読みも壁時計の固定待ちに頼らず、音声時刻の進行を確認して
+ * 前後の窓が接続点を実際に覆うように取る。
+ *
  * @param input - 実コードの変換結果と採取条件。
  * @returns 採取した標本。
  */
@@ -836,17 +887,59 @@ async function captureMidNoteOffInPage(
 
   const session = toneModule.createHarmonicToneSession(createContext);
   const baselineRms = rmsOf();
+  // 発音開始の音声時刻を掴む。予約はこの直後の現在時刻を基準に行われる。
+  const noteOnAudioTime = context.currentTime;
   await session.start({ frequency: input.frequency, preset: input.preset });
-  // 立ち上がりの途中でノートオフする。
-  await sleep(input.noteOffDelayMs);
-  const preRms = rmsOf();
+  // 立ち上がりの信号が現れるまで短間隔で確かめる。固定の待ちでは描画の
+  // 遅れと競合して立ち上がりに間に合わず無音を採取するため、期限付きで
+  // 信号の出現を待つ。アタック完了まで延ばして待つことはせず、時間窓を
+  // 外れたらその旨を標本として返す。
+  const onsetStartWall = Date.now();
+  let onsetRms = rmsOf();
+  let onsetPolls = 0;
+  let onsetAudioTimeS = context.currentTime - noteOnAudioTime;
+  while (
+    (onsetRms < input.onsetRmsMin || onsetRms < baselineRms) &&
+    Date.now() - onsetStartWall < input.onsetTimeoutMs &&
+    onsetAudioTimeS <= input.attackTimeS
+  ) {
+    await sleep(input.onsetPollMs);
+    onsetPolls += 1;
+    onsetRms = rmsOf();
+    onsetAudioTimeS = context.currentTime - noteOnAudioTime;
+  }
+  const onsetReached = onsetRms >= input.onsetRmsMin && onsetRms >= baselineRms;
+  // 信号の有無にかかわらず直前読みの音声時刻を残し、接続点の前を覆う確認に使う。
+  const preRms = onsetRms;
   const preJump = maxJumpOf();
+  const preAudioTimeS = onsetAudioTimeS;
   const stateAtTone = context.state;
   session.noteOff();
+  const noteOnToNoteOffS = context.currentTime - noteOnAudioTime;
+  const windowExceeded = !onsetReached || noteOnToNoteOffS > input.attackTimeS;
+  // 直後窓は音声時刻の進行を確認してから読む。直後の読みは切断前の標本を
+  // 主に含むため、接続点を窓の内側に含めたままノートオフ後の信号で窓を
+  // 更新する。待ちの刻みが採取窓（約93ミリ秒）より粗いと接続点が窓の外に
+  // 出るため、発音出現と同じ短間隔で進みを確認する。期限内の到達可否は
+  // 標本の時刻で検査側が確かめる。
+  const waitAudioAdvance = async (fromAudioTime: number, advanceS: number): Promise<void> => {
+    const waitStart = Date.now();
+    while (
+      context.currentTime - fromAudioTime < advanceS &&
+      Date.now() - waitStart < input.settleTimeoutMs
+    ) {
+      await sleep(input.onsetPollMs);
+    }
+  };
+  await waitAudioAdvance(noteOnAudioTime + noteOnToNoteOffS, input.postAdvanceS);
   const postJump = maxJumpOf();
   const postRms = rmsOf();
-  await sleep(input.midDelayMs);
+  const postAudioTimeS = context.currentTime - noteOnAudioTime;
+  // 減衰の途中はリリースの半ばの音声時刻まで進めて読む。壁時計の固定待ち
+  // では描画遅れで減衰前の標本を混ぜるため、音声時刻の進行で待つ。
+  await waitAudioAdvance(noteOnAudioTime + noteOnToNoteOffS, input.releaseTimeS / 2);
   const midRms = rmsOf();
+  const midAudioTimeS = context.currentTime - noteOnAudioTime;
   let stoppedRms = rmsOf();
   let stopPolls = 0;
   // 消音の標本と終了通知の到達を同じ期限で待つ。標本だけが先に消えても
@@ -882,6 +975,14 @@ async function captureMidNoteOffInPage(
     stopPolls,
     playingAfterRelease,
     releasingAfterRelease,
+    onsetReached,
+    onsetPolls,
+    onsetAudioTimeS,
+    noteOnToNoteOffS,
+    windowExceeded,
+    preAudioTimeS,
+    postAudioTimeS,
+    midAudioTimeS,
   };
 }
 
@@ -1124,8 +1225,13 @@ describe('調波単音の音声信号採取', () => {
             preset,
             frequency: CAPTURE_FREQUENCY_HZ,
             fftSize: ENVELOPE_FFT_SIZE,
-            noteOffDelayMs: 40,
-            midDelayMs: 200,
+            onsetRmsMin: MID_NOTEOFF_ONSET_RMS_MIN,
+            onsetTimeoutMs: TONE_TIMEOUT_MS,
+            onsetPollMs: MID_NOTEOFF_ONSET_POLL_MS,
+            attackTimeS: HARMONIC_ENVELOPE_DEFAULTS.attackTime,
+            releaseTimeS: HARMONIC_ENVELOPE_DEFAULTS.releaseTime,
+            postAdvanceS: MID_NOTEOFF_POST_ADVANCE_S,
+            settleTimeoutMs: TONE_TIMEOUT_MS,
             pollIntervalMs: CAPTURE_POLL_INTERVAL_MS,
             stopTimeoutMs: STOP_TIMEOUT_MS,
             stoppedRmsMax: STOPPED_RMS_MAX,
@@ -1145,6 +1251,9 @@ describe('調波単音の音声信号採取', () => {
           },
           thresholds: {
             baselineRmsMax: BASELINE_RMS_MAX,
+            onsetRmsMin: MID_NOTEOFF_ONSET_RMS_MIN,
+            attackTimeS: HARMONIC_ENVELOPE_DEFAULTS.attackTime,
+            releaseTimeS: HARMONIC_ENVELOPE_DEFAULTS.releaseTime,
             noteOffJumpMax: NOTE_OFF_JUMP_MAX,
             stoppedRmsMax: STOPPED_RMS_MAX,
             stoppedRmsRatioMax: STOPPED_RMS_RATIO_MAX,
@@ -1162,9 +1271,33 @@ describe('調波単音の音声信号採取', () => {
           `${JSON.stringify(evidence, null, 2)}\n`,
         );
 
-        // 立ち上がりの途中で信号があること。
+        // 立ち上がりの途中で信号があること。発音出現を確かめてから
+        // ノートオフするため、無音のままの採取は立ち上がり採取不可として失敗する。
         expect(measurements.baselineRms).toBeLessThan(BASELINE_RMS_MAX);
+        expect(measurements.onsetReached).toBe(true);
+        expect(measurements.windowExceeded).toBe(false);
+        expect(measurements.noteOnToNoteOffS).toBeGreaterThan(0);
+        expect(measurements.noteOnToNoteOffS).toBeLessThanOrEqual(
+          HARMONIC_ENVELOPE_DEFAULTS.attackTime,
+        );
+        expect(measurements.preRms).toBeGreaterThan(MID_NOTEOFF_ONSET_RMS_MIN);
         expect(measurements.preRms).toBeGreaterThan(measurements.baselineRms);
+        // 接続点の前後を実際に覆うこと。直前読みはノートオフ以前、直後読みは
+        // 音声時刻の進行を確認してから取り、接続点を窓の内側に含める。
+        // 直後窓は採取窓1窓分以内の進行で読むため、接続点が窓の内側に入る。
+        expect(measurements.preAudioTimeS).toBeLessThanOrEqual(measurements.noteOnToNoteOffS);
+        expect(measurements.postAudioTimeS).toBeGreaterThanOrEqual(
+          measurements.noteOnToNoteOffS,
+        );
+        expect(measurements.postAudioTimeS - measurements.noteOnToNoteOffS).toBeLessThanOrEqual(
+          ENVELOPE_FFT_SIZE / measurements.sampleRate,
+        );
+        expect(measurements.midAudioTimeS).toBeGreaterThan(measurements.noteOnToNoteOffS);
+        // 減衰途中の読みはリリース完了前であり、まだ信号が残ること。
+        // 即時切断では途中も消音と同じになるため、この差で取り違えを検出する。
+        expect(
+          measurements.midAudioTimeS - measurements.noteOnToNoteOffS,
+        ).toBeLessThan(HARMONIC_ENVELOPE_DEFAULTS.releaseTime);
         // 接続点に粗い不連続がないこと。直後の窓は切断前の標本を主に含むため、
         // 段差は滑らかな波形の範囲に留まる。不連続の有無は前後の段差の記録で残す。
         expect(measurements.postJump).toBeLessThan(NOTE_OFF_JUMP_MAX);

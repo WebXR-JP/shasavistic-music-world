@@ -3,7 +3,7 @@ import { RigidBody } from '@react-three/rapier'
 import { useRef } from 'react'
 import { Mesh } from 'three'
 import { Skybox } from './components/Skybox'
-import { HarmonicSwitch } from './components/HarmonicSwitch'
+import { PitchGrid } from './components/PitchGrid'
 import { COLORS, WORLD_CONFIG } from './constants'
 
 export interface WorldProps {
@@ -73,9 +73,9 @@ export const World: React.FC<WorldProps> = ({ position = [0, 0, 0], scale = 1 })
         <SpawnPoint />
       </group>
 
-      {/* ========== 調波シンセの操作口（4 Cube による和音集合の選択） ========== */}
-      {/* 開発環境の中央光線の到達距離（3.5m）に収める。スポーンからの距離は約3m。 */}
-      <HarmonicSwitch position={[0, 1.3, 5]} />
+      {/* ========== 音高格子の操作口（15 Cube・八方向移動・次元選択） ========== */}
+      {/* 開発環境の中央光線の到達距離（3.5m）に収める。左右の端は平行移動で寄る。 */}
+      <PitchGrid position={[0, 0, 5]} />
     </group>
   )
 }
