@@ -4,6 +4,12 @@ import { useRef } from 'react'
 import { Mesh } from 'three'
 import { Skybox } from './components/Skybox'
 import { PitchGrid } from './components/PitchGrid'
+import { TheoryIntroPanel } from './components/PitchGrid/TheoryIntroPanel'
+import {
+  THEORY_INTRO_POSITION,
+  THEORY_INTRO_SIZE,
+} from './components/PitchGrid/theoryPanel'
+import pitchGridIntro from './content/pitch-grid-intro.json'
 import { COLORS, WORLD_CONFIG } from './constants'
 
 export interface WorldProps {
@@ -76,6 +82,15 @@ export const World: React.FC<WorldProps> = ({ position = [0, 0, 0], scale = 1 })
       {/* ========== 音高格子の操作口（15 Cube・八方向移動・次元選択） ========== */}
       {/* 開発環境の中央光線の到達距離（3.5m）に収める。左右の端は平行移動で寄る。 */}
       <PitchGrid position={[0, 0, 5]} />
+
+      {/* ========== 理論説明の1枚パネル。格子と独立の非操作面として奥側へ置く ========== */}
+      {/* 格子（z=5）より小さい z に置き、正面を訪問者側の +z へ向ける。 */}
+      {/* スポーン正面の格子・操作釦と投影上も重ならないよう右へ寄せる。 */}
+      <TheoryIntroPanel
+        intro={pitchGridIntro}
+        position={THEORY_INTRO_POSITION}
+        size={THEORY_INTRO_SIZE}
+      />
     </group>
   )
 }

@@ -1,5 +1,5 @@
 import { Interactable } from '@xrift/world-components';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   allPitchGridPoints,
   PITCH_GRID_VERTICAL_PRIMES,
@@ -12,8 +12,6 @@ import {
   type PitchGridController,
   type PitchGridControllerSnapshot,
 } from '../../audio/pitchGridController';
-import pitchGridIntro from '../../content/pitch-grid-intro.json';
-import { theoryPanelPlates } from './theoryPanel';
 import { TextPlate } from './plates';
 
 export interface PitchGridProps {
@@ -157,9 +155,6 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
 
   const onKeys = new Set(snapshot.points.map((point) => pitchGridKey(point)));
   const verticalPrime = PITCH_GRID_VERTICAL_PRIMES[snapshot.dimension];
-  // 理論説明の文章は bundled データから静的 import で読む。追加の読込や
-  // 読込失敗の状態は作らない。配置は theoryPanel に集める。
-  const theoryPanels = useMemo(() => theoryPanelPlates(pitchGridIntro), []);
 
   return (
     <group position={[position[0], position[1], position[2]]}>
@@ -273,17 +268,6 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
           </group>
         );
       })}
-      {/* ========== 格子奥側の理論説明。非操作のパネルとして格子より遠い側に置く ========== */}
-      {/* Cube を完全に隠さず、照準・操作釦を遮らない格子上方の余白に置く。 */}
-      {theoryPanels.map((panel, index) => (
-        <TextPlate
-          key={`pitch-grid-theory-${index}`}
-          lines={panel.lines}
-          size={panel.size}
-          position={panel.position}
-          small
-        />
-      ))}
     </group>
   );
 }

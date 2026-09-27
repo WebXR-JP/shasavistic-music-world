@@ -4,7 +4,7 @@
  * Canvas の実描画を使わず、書体選択が「収まる場合は基の大きさのまま、
  * 収まらない場合は描画幅に収まる大きさまで縮小する」ことを確かめる。
  * 既存パネルの短い銘板の見た目を変えないこと、実データから作られる
- * 全パネル行が欠けないことを判定対象とする。文面の内容や文字数は断定しない。
+ * 1枚パネルの全行が欠けないことを判定対象とする。文面の内容や文字数は断定しない。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -16,7 +16,14 @@ import {
   selectPlateFont,
   type PlateTextWidth,
 } from './plates';
-import { theoryPanelPlates } from './theoryPanel';
+import {
+  THEORY_INTRO_CANVAS_WIDTH,
+  THEORY_INTRO_MARGIN_PX,
+  layoutTheoryIntro,
+  theoryBodyFont,
+  theoryTitleFont,
+  type TheoryTextWidth,
+} from './theoryPanel';
 
 /** 行文に使える幅（px）。 */
 const maxLineWidth = PLATE_CANVAS_WIDTH - PLATE_TEXT_MARGIN_PX * 2;
@@ -74,20 +81,32 @@ describe('一行分の書体選択', () => {
   });
 });
 
-describe('実データから作るパネル行の描画幅', () => {
-  it('見出し行が1行書体で欠けない', () => {
-    const font = selectPlateFont(fullWidthMeasure, 44, true, introData.title);
-    expect(assumedWidth(font, introData.title)).toBeLessThanOrEqual(maxLineWidth);
+describe('実データから作る1枚パネルの行の描画幅', () => {
+  /** 1枚パネルの行文に使える幅（px）。 */
+  const introLineWidth = THEORY_INTRO_CANVAS_WIDTH - THEORY_INTRO_MARGIN_PX * 2;
+
+  /** 全角相当の保守的な送り幅で測る測定口。 */
+  const fullWidthMeasure: TheoryTextWidth = (font, text) => {
+    const px = Number(font.match(/(\d+)px/)?.[1] ?? Number.NaN);
+    return px * Array.from(text).length;
+  };
+
+  it('見出し行が見出し書体で欠けない', () => {
+    const layout = layoutTheoryIntro(fullWidthMeasure, introData);
+    expect(layout.fits).toBe(true);
+    for (const line of layout.titleLines) {
+      const width = fullWidthMeasure(theoryTitleFont(layout.titleFontPx), line);
+      expect(width).toBeLessThanOrEqual(introLineWidth);
+    }
   });
 
-  it('本文の全行が小さい書体で欠けない', () => {
-    const specs = theoryPanelPlates(introData);
-    expect(specs.length).toBeGreaterThan(1);
-    for (const spec of specs.slice(1)) {
-      for (const line of spec.lines) {
-        // 本文の最大基サイズで判定し、どの行配置でも収まることを確かめる。
-        const font = selectPlateFont(fullWidthMeasure, 44, true, line);
-        expect(assumedWidth(font, line)).toBeLessThanOrEqual(maxLineWidth);
+  it('本文の全行が本文書体で欠けない', () => {
+    const layout = layoutTheoryIntro(fullWidthMeasure, introData);
+    expect(layout.fits).toBe(true);
+    for (const rows of layout.paragraphLines) {
+      for (const line of rows) {
+        const width = fullWidthMeasure(theoryBodyFont(layout.bodyFontPx), line);
+        expect(width).toBeLessThanOrEqual(introLineWidth);
       }
     }
   });
