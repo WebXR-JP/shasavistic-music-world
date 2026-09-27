@@ -1,5 +1,5 @@
 import { Interactable } from '@xrift/world-components';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   allPitchGridPoints,
   PITCH_GRID_VERTICAL_PRIMES,
@@ -12,6 +12,8 @@ import {
   type PitchGridController,
   type PitchGridControllerSnapshot,
 } from '../../audio/pitchGridController';
+import pitchGridIntro from '../../content/pitch-grid-intro.json';
+import { theoryPanelPlates } from './theoryPanel';
 import { TextPlate } from './plates';
 
 export interface PitchGridProps {
@@ -45,10 +47,10 @@ const GRID_LABEL_SIZE: readonly [number, number] = [0.52, 0.24];
  */
 const GRID_LABEL_HEIGHT = 0.34;
 
-/** オン状態の Cube の色。発音中であることの色相の合図に使う。 */
+/** オン状態の Cube の色。選択意図の色相の合図に使う。発音中の断定には使わない。 */
 const GRID_ON_COLOR = '#ff7043';
 
-/** オフ状態の Cube の色。停止中であることの色相の合図に使う。 */
+/** オフ状態の Cube の色。非選択の色相の合図に使う。発音中の断定には使わない。 */
 const GRID_OFF_COLOR = '#4caf50';
 
 /** 移動操作釦の一辺の長さ。 */
@@ -155,6 +157,9 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
 
   const onKeys = new Set(snapshot.points.map((point) => pitchGridKey(point)));
   const verticalPrime = PITCH_GRID_VERTICAL_PRIMES[snapshot.dimension];
+  // 理論説明の文章は bundled データから静的 import で読む。追加の読込や
+  // 読込失敗の状態は作らない。配置は theoryPanel に集める。
+  const theoryPanels = useMemo(() => theoryPanelPlates(pitchGridIntro), []);
 
   return (
     <group position={[position[0], position[1], position[2]]}>
@@ -174,16 +179,16 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
               onInteract={() => {
                 handleToggle(point);
               }}
-              interactionText={on ? `止める ${label} 発音中` : `鳴らす ${label}`}
+              interactionText={on ? `止める ${label}` : `鳴らす ${label}`}
             >
               <mesh position={[0, 0, 0]} castShadow>
                 <boxGeometry args={[GRID_CUBE_SIZE, GRID_CUBE_SIZE, GRID_CUBE_SIZE]} />
                 <meshStandardMaterial color={on ? GRID_ON_COLOR : GRID_OFF_COLOR} />
               </mesh>
             </Interactable>
-            {/* 状態は銘板の文言と明暗でも示し、色だけに頼らない。 */}
+            {/* 状態は銘板の文言と明暗でも示し、色だけに頼らない。オンは選択意図であり発音中の断定には使わない。 */}
             <TextPlate
-              lines={[label, on ? 'ON 発音中' : 'OFF']}
+              lines={[label, on ? 'ON' : 'OFF']}
               size={GRID_LABEL_SIZE}
               position={[0, GRID_LABEL_HEIGHT, 0]}
               light={on}
@@ -268,6 +273,17 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
           </group>
         );
       })}
+      {/* ========== 格子奥側の理論説明。非操作のパネルとして格子より遠い側に置く ========== */}
+      {/* Cube を完全に隠さず、照準・操作釦を遮らない格子上方の余白に置く。 */}
+      {theoryPanels.map((panel, index) => (
+        <TextPlate
+          key={`pitch-grid-theory-${index}`}
+          lines={panel.lines}
+          size={panel.size}
+          position={panel.position}
+          small
+        />
+      ))}
     </group>
   );
 }

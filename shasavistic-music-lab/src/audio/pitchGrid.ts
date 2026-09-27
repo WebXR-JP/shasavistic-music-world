@@ -260,7 +260,8 @@ export interface PitchGridState {
   /**
    * 縦軸の次元を選び直す。
    *
-   * 切替では集合を空にする。同じ次元の選び直しは何もしない。
+   * 切替ではオン集合を保ち、選択次元だけを更新する。
+   * 同じ次元の選び直しは何もしない。
    *
    * @param dimension - 選択次元。
    * @returns 切替の有無と切替後の快照。
@@ -333,7 +334,6 @@ export function createPitchGridState(
         return { changed: false, snapshot: snapshot() };
       }
       dimension = next;
-      onPoints.clear();
       return { changed: true, snapshot: snapshot() };
     },
   };

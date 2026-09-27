@@ -513,3 +513,136 @@ describe('格子の個別声と共有文脈', () => {
     expect(harness.contexts).toHaveLength(0);
   });
 });
+
+describe('格子の次元切替の専用境界', () => {
+  it('切替境界は保持した全声を新規開始する', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.setVoices([
+      { key: '0,0', frequency: 220 },
+      { key: '1,0', frequency: 330 },
+    ]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    await sound.switchDimension([
+      { key: '0,0', frequency: 275 },
+      { key: '1,0', frequency: 412.5 },
+    ]);
+    // 旧声は即時に止めて切り離し、全座標に新声を作ること。
+    expect(context.oscillators).toHaveLength(4);
+    expect(context.oscillators[0]?.stopTimes).toEqual([undefined]);
+    expect(context.oscillators[1]?.stopTimes).toEqual([undefined]);
+    expect(context.oscillators.map((oscillator) => oscillator.frequency.value)).toEqual([
+      220, 330, 275, 412.5,
+    ]);
+    expect(sound.voiceCount).toBe(2);
+    await sound.dispose();
+  });
+
+  it('減衰予約済みの同鍵・同周波数も再生成し旧通知が新声に作用しない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    // 旧声を減衰予約のまま残す。停止と集合反映の単純な重ね合わせでは
+    // この旧声を使い回して無音になり得る。
+    await sound.setVoices([]);
+    // 中央行など周波数が変わらない鍵でも新声を開始すること。
+    await sound.switchDimension([{ key: '0,0', frequency: 220 }]);
+    expect(context.oscillators).toHaveLength(2);
+    expect(context.oscillators[1]?.frequency.value).toBe(220);
+    expect(sound.voiceCount).toBe(1);
+    // 旧声の終了通知は所有照合で無視し、新声を止めないこと。
+    context.oscillators[0]?.fireEnded();
+    expect(sound.voiceCount).toBe(1);
+    expect(context.oscillators[1]?.calls).not.toContain('disconnect');
+    expect(context.oscillators[1]?.stopTimes).toEqual([]);
+    await sound.dispose();
+  });
+
+  it('操作直後の切替で古い再開が新声に作用しない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    const release = harness.holdResume();
+    const pending = sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    await sound.switchDimension([{ key: '0,0', frequency: 275 }]);
+    // 起動待ちは取り消して即時に外すこと。
+    expect(context.oscillators[0]?.stopTimes).toEqual([undefined]);
+    expect(sound.voiceCount).toBe(1);
+    // 古い再開の完了は所有照合で無視し、新声を作り直さないこと。
+    release();
+    await pending;
+    await flush();
+    expect(context.oscillators).toHaveLength(2);
+    expect(sound.voiceCount).toBe(1);
+    expect(context.oscillators[1]?.frequency.value).toBe(275);
+    await sound.dispose();
+  });
+
+  it('連続切替で古い再開失敗が新声を外さない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    harness.enqueueResume(() => Promise.reject(new Error('切替失敗')));
+    const first = sound.switchDimension([{ key: '0,0', frequency: 220 }]);
+    const second = sound.switchDimension([{ key: '0,0', frequency: 330 }]);
+    // 古い切替の失敗は所有が移っているため静かに終えること。
+    await first;
+    await second;
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    expect(sound.voiceCount).toBe(1);
+    expect(context.oscillators).toHaveLength(2);
+    expect(context.oscillators[1]?.frequency.value).toBe(330);
+    // 古い声の終了通知も新声に作用しないこと。
+    context.oscillators[0]?.fireEnded();
+    expect(sound.voiceCount).toBe(1);
+    expect(context.oscillators[1]?.calls).not.toContain('disconnect');
+    await sound.dispose();
+  });
+
+  it('空集合の切替は旧声を止め文脈を作らない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.switchDimension([]);
+    expect(harness.contexts).toHaveLength(0);
+    expect(sound.voiceCount).toBe(0);
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    await sound.switchDimension([]);
+    expect(context.oscillators[0]?.stopTimes).toEqual([undefined]);
+    expect(sound.voiceCount).toBe(0);
+    expect(context.oscillators).toHaveLength(1);
+    await sound.dispose();
+  });
+
+  it('不正な切替は文脈を作らずに拒む', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await expect(
+      sound.switchDimension([
+        { key: '0,0', frequency: 220 },
+        { key: '0,0', frequency: 330 },
+      ]),
+    ).rejects.toThrow();
+    await expect(sound.switchDimension([{ key: '0,0', frequency: 0 }])).rejects.toThrow(
+      RangeError,
+    );
+    expect(harness.contexts).toHaveLength(0);
+    expect(sound.voiceCount).toBe(0);
+    await sound.dispose();
+  });
+});

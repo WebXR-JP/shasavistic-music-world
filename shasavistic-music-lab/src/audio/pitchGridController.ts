@@ -7,8 +7,9 @@
  * 音声側が格子範囲や移動可否を再判定することはない。
  *
  * 移動は移動先を先に判定し、全点が収まる場合だけ集合全体を
- * 一度に更新する。次元切替では起動待ちを含めた旧音を止め、
- * 集合を空にする。UI接続は次の増分であり、ここでは操作口と
+ * 一度に更新する。次元切替では選択次元だけを更新してオン集合を保ち、
+ * 保持した全座標を新次元の周波数で鳴らし直す。空集合の切替では発音も
+ * 文脈生成もしない。UI接続は次の増分であり、ここでは操作口と
  * 快照だけを用意する。旧4 Cubeの置換は含まない。
  *
  * @packageDocumentation
@@ -73,8 +74,10 @@ export interface PitchGridController {
   /**
    * 縦軸の次元を選び直す。
    *
-   * 切替では起動待ちを含めた旧音を止め、集合を空にする。
-   * 同じ次元の選び直しは何もしない。
+   * 切替ではオン集合を保ち、選択次元だけを更新する。空集合の切替では
+   * 発音も文脈生成もしない。同じ次元の選び直しは何もしない。
+   * 再開に失敗しても集合と新次元は巻き戻さず、声だけを失敗扱いとして
+   * 次の操作で鳴らし直せるようにする。
    *
    * @param dimension - 選択次元。
    * @throws `RangeError` — 選択次元でない場合。音声へは触れない。
@@ -183,8 +186,30 @@ export function createPitchGridController(
       if (!result.changed) {
         return;
       }
-      // 切替では起動待ちを含めた旧音を止める。集合は空のため差分の呼び出しは重ねない。
-      sound?.stopAll();
+      // 空集合の切替では発音も文脈生成もしない。次元の更新だけを保つ。
+      if (result.snapshot.points.length === 0) {
+        notify();
+        return;
+      }
+      if (sound === null) {
+        sound = createSound();
+      }
+      // 切替専用の境界で旧声を止め、保持した全座標を新次元で鳴らし直す。
+      // 再開の失敗時は声だけが外れ、集合と新次元は保つ。再操作で鳴らし直せる。
+      const active = sound;
+      const specs = specsOf(result.snapshot.dimension, result.snapshot.points);
+      void active
+        .switchDimension(specs)
+        .then(() => {
+          if (!disposed) {
+            notify();
+          }
+        })
+        .catch(() => {
+          if (!disposed) {
+            notify();
+          }
+        });
       notify();
     },
     dispose(): Promise<void> {

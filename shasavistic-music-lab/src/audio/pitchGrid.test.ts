@@ -3,7 +3,7 @@
  *
  * 音声文脈を使わず、純粋計算と状態遷移だけを確かめる。15点の一意性、
  * 論理比と発音周波数の区別、オクターブ収容、八方向の平行移動、重なり、
- * 端での全体拒否、空集合の無適用、次元切替の集合クリアを判定対象とする。
+ * 端での全体拒否、空集合の無適用、次元切替の集合保持を判定対象とする。
  * 具体値はこの検査に置く。音声信号の採取は対象外とする。
  */
 
@@ -165,10 +165,21 @@ describe('オン集合の状態遷移', () => {
     expect(result.snapshot.points).toEqual([]);
   });
 
-  it('次元切替で集合を空にして次元を変える', () => {
+  it('次元切替でオン集合を保持して次元だけを変える', () => {
     const state = createPitchGridState();
     state.toggle({ x: 0, y: 0 });
     state.toggle({ x: 1, y: -1 });
+    const result = state.selectDimension(4);
+    expect(result.changed).toBe(true);
+    expect(result.snapshot.dimension).toBe(4);
+    expect(result.snapshot.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 1, y: -1 },
+    ]);
+  });
+
+  it('空集合の次元切替は次元だけを変える', () => {
+    const state = createPitchGridState();
     const result = state.selectDimension(4);
     expect(result.changed).toBe(true);
     expect(result.snapshot.dimension).toBe(4);

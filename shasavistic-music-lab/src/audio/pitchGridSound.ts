@@ -4,7 +4,8 @@
  * 一つの音声文脈を格子操作部品の存続中に共有し、座標由来の鍵で
  * 最大15の活動声を管理する。オンでその点の声を開始し、オフで
  * その点だけを終了して他点を巻き込まない。移動時は新旧集合の
- * 差分を一括反映する。次元切替では起動待ちを含めた旧音を止める。
+ * 差分を一括反映する。次元切替は専用の境界で旧声の所有を切り離し、
+ * 保持した全座標に新声を作る一まとまりとする。
  *
  * 格子範囲や移動可否は再判定しない（操作側の責務）。鍵は不透明な
  * 文字列として扱い、座標の意味は解釈しない。常設診断口は作らない。
@@ -133,6 +134,28 @@ export interface PitchGridSound {
    * 一つの声の生成失敗は他の声を取り消さない。声は独立に寿命を持つ。
    */
   setVoices(specs: readonly PitchGridVoiceSpec[]): Promise<void>;
+  /**
+   * 次元切替の専用境界として保持した全座標を鳴らし直す。
+   *
+   * 通常の `setVoices` の同鍵・同周波数の再利用分岐を通さず、起動待ちを
+   * 取り消し、旧声の所有を切り離してから、保持した全座標に新声を作る
+   * 一まとまりとする。既存の停止処理は同鍵の声を減衰予約のまま保持する
+   * ため、停止と集合反映を単純に重ねると周波数が変わらない鍵（中央行など）
+   * では旧声を使い回して無音になり得る。切替では同鍵・同周波数の再利用を
+   * せず、全座標の新声を開始する。通常のオフ・移動の減衰処理は変えない。
+   *
+   * @param specs - 鳴らし直す声の鍵と周波数。鍵の重複・空鍵・上限超過を含まないこと。
+   * 空集合の場合は旧声の停止だけを行い、音声文脈は生成しない。
+   * @returns 共有文脈の再開完了で解決する約束。再開の失敗時は開始した声だけを
+   * 外して文脈は保ち、失敗を伝える。
+   * @throws `RangeError` — 周波数が正の有限値でない、声数が上限を超える場合。音声文脈は生成しない。
+   * @throws `Error` — 鍵が重複・空、破棄後に呼び出した場合。
+   * @remarks
+   * 連続切替、操作直後の切替、再開の遅延・失敗、破棄との競合では、声の実体照合に
+   * より古い完了通知が新声を止めたり復活させたりしない。クロスフェードや汎用音声
+   * 制御基盤は設けない。
+   */
+  switchDimension(specs: readonly PitchGridVoiceSpec[]): Promise<void>;
   /**
    * 全声を止める。
    *
@@ -263,6 +286,7 @@ export function createPitchGridContext(): PitchGridSoundContext {
  *
  * 移動で同じ鍵に声が残る場合は開始し直さない。集合の意味上は
  * 移動済みだが、同じ鍵・同じ周波数の音を途切れさせないためである。
+ * 切替ではこの再利用を通さず、専用の境界で全座標に新声を作る。
  *
  * @param createContext - 音声文脈の生成口。省略時は `AudioContext` を最小口へ読み替える。
  * @returns 操作口の存続中は使い回す演奏口。
@@ -337,30 +361,114 @@ export function createPitchGridSound(
     };
   };
 
+  // 反映する声の並びを検証する。不正入力では音声文脈を作らない。
+  // 判定は生成の前に済ませる。比率の正規化と同様、生成前の検査である。
+  const validateSpecs = (specs: readonly PitchGridVoiceSpec[]): void => {
+    const seen = new Set<string>();
+    for (const spec of specs) {
+      if (typeof spec.key !== 'string' || spec.key === '') {
+        throw new Error('声の鍵は空でない文字列であること');
+      }
+      if (seen.has(spec.key)) {
+        throw new Error(`重複した声の鍵である: ${spec.key}`);
+      }
+      seen.add(spec.key);
+      if (!Number.isFinite(spec.frequency) || spec.frequency <= 0) {
+        throw new RangeError(`声の周波数は正の有限値であること: ${String(spec.frequency)}`);
+      }
+    }
+    if (specs.length > PITCH_GRID_MAX_VOICES) {
+      throw new RangeError(
+        `格子の声数は同時発音の上限以下であること: ${specs.length} > ${PITCH_GRID_MAX_VOICES}`,
+      );
+    }
+  };
+
+  // 一つの新声を開始して所有に登録する。
+  // ADR: 声は独立に寿命を持つため、一つの声の生成失敗は他の声を取り消さない。
+  // 失敗した鍵は所有に戻さず、成功した声は鳴らし続ける。
+  const startVoice = (
+    activeContext: PitchGridSoundContext,
+    key: string,
+    frequency: number,
+  ): ActiveVoice => {
+    const nextGain = activeContext.createGain();
+    const next = activeContext.createOscillator();
+    const startTime = activeContext.currentTime;
+    // 声の利得は発音前に無音とし、現在時刻を基準に包絡を予約する。
+    // 波形は固定 `sawtooth` で使い、周期波は作らない。
+    nextGain.gain.value = 0;
+    scheduleNoteOn(nextGain.gain, startTime, PITCH_GRID_VOICE_GAIN);
+    next.type = 'sawtooth';
+    next.frequency.value = frequency;
+    next.connect(nextGain);
+    nextGain.connect(activeContext.destination);
+    next.start();
+    const voice: ActiveVoice = {
+      key,
+      frequency,
+      oscillator: next,
+      gain: nextGain,
+      noteOnTime: startTime,
+      released: false,
+      settled: false,
+    };
+    voices.set(key, voice);
+    return voice;
+  };
+
+  // 文脈の再開完了まで開始した声を追う。所有の照合は声の実体で行い、
+  // 世代番号は設けない。古い完了通知が新声を止めたり復活させたりしない。
+  const trackStartedVoices = (
+    started: readonly ActiveVoice[],
+    resumeTask: Promise<void>,
+  ): Promise<void> => {
+    if (started.length === 0) {
+      return Promise.resolve();
+    }
+    // 自身への参照は完了後の後始末の照合に使う。
+    return resumeTask.then(
+      () => {
+        for (const voice of started) {
+          if (disposed || voices.get(voice.key) !== voice) {
+            continue;
+          }
+          voice.settled = true;
+        }
+      },
+      (error: unknown) => {
+        // 取り消された起動は失敗として扱わず、静かに終える。
+        if (disposed) {
+          for (const voice of started) {
+            detachVoiceImmediate(voice);
+          }
+          return;
+        }
+        let owned = false;
+        for (const voice of started) {
+          if (voices.get(voice.key) === voice) {
+            owned = true;
+            break;
+          }
+        }
+        if (!owned) {
+          return;
+        }
+        // 再開の失敗時は開始した声だけを外して文脈は保つ。
+        for (const voice of started) {
+          detachVoiceImmediate(voice);
+        }
+        throw error;
+      },
+    );
+  };
+
   const sound: PitchGridSound = {
     get voiceCount(): number {
       return voices.size;
     },
     async setVoices(specs: readonly PitchGridVoiceSpec[]): Promise<void> {
-      // 比率の正規化と同様、不正入力では音声文脈を作らない。判定は生成の前に済ませる。
-      const seen = new Set<string>();
-      for (const spec of specs) {
-        if (typeof spec.key !== 'string' || spec.key === '') {
-          throw new Error('声の鍵は空でない文字列であること');
-        }
-        if (seen.has(spec.key)) {
-          throw new Error(`重複した声の鍵である: ${spec.key}`);
-        }
-        seen.add(spec.key);
-        if (!Number.isFinite(spec.frequency) || spec.frequency <= 0) {
-          throw new RangeError(`声の周波数は正の有限値であること: ${String(spec.frequency)}`);
-        }
-      }
-      if (specs.length > PITCH_GRID_MAX_VOICES) {
-        throw new RangeError(
-          `格子の声数は同時発音の上限以下であること: ${specs.length} > ${PITCH_GRID_MAX_VOICES}`,
-        );
-      }
+      validateSpecs(specs);
       if (disposed) {
         throw new Error('破棄後の演奏口は使えない');
       }
@@ -389,71 +497,30 @@ export function createPitchGridSound(
           }
           releaseVoice(owned);
         }
-        const nextGain = activeContext.createGain();
-        const next = activeContext.createOscillator();
-        const startTime = activeContext.currentTime;
-        // 声の利得は発音前に無音とし、現在時刻を基準に包絡を予約する。
-        // 波形は固定 `sawtooth` で使い、周期波は作らない。
-        nextGain.gain.value = 0;
-        scheduleNoteOn(nextGain.gain, startTime, PITCH_GRID_VOICE_GAIN);
-        next.type = 'sawtooth';
-        next.frequency.value = spec.frequency;
-        next.connect(nextGain);
-        nextGain.connect(activeContext.destination);
-        next.start();
-        const voice: ActiveVoice = {
-          key: spec.key,
-          frequency: spec.frequency,
-          oscillator: next,
-          gain: nextGain,
-          noteOnTime: startTime,
-          released: false,
-          settled: false,
-        };
-        // ADR: 声は独立に寿命を持つため、一つの声の生成失敗は他の声を取り消さない。
-        // 失敗した鍵は所有に戻さず、成功した声は鳴らし続ける。
-        voices.set(spec.key, voice);
-        started.push(voice);
+        started.push(startVoice(activeContext, spec.key, spec.frequency));
       }
-      if (started.length === 0) {
-        return Promise.resolve();
+      return trackStartedVoices(started, activeContext.resume());
+    },
+    async switchDimension(specs: readonly PitchGridVoiceSpec[]): Promise<void> {
+      validateSpecs(specs);
+      if (disposed) {
+        throw new Error('破棄後の演奏口は使えない');
       }
-      // 自身への参照は完了後の後始末の照合に使う。
-      const task = activeContext.resume().then(
-        () => {
-          for (const voice of started) {
-            if (disposed || voices.get(voice.key) !== voice) {
-              continue;
-            }
-            voice.settled = true;
-          }
-        },
-        (error: unknown) => {
-          // 取り消された起動は失敗として扱わず、静かに終える。
-          if (disposed) {
-            for (const voice of started) {
-              detachVoiceImmediate(voice);
-            }
-            return;
-          }
-          let owned = false;
-          for (const voice of started) {
-            if (voices.get(voice.key) === voice) {
-              owned = true;
-              break;
-            }
-          }
-          if (!owned) {
-            return;
-          }
-          // 再開の失敗時は開始した声だけを外して文脈は保つ。
-          for (const voice of started) {
-            detachVoiceImmediate(voice);
-          }
-          throw error;
-        },
-      );
-      return task;
+      // 切替専用の境界として、通常の差分反映の再利用分岐を通さない。
+      // 減衰予約済みの旧声を使い回すと周波数が変わらない鍵では無音になるため、
+      // 起動待ちを取り消し、旧声の所有を切り離してから全座標に新声を作る。
+      for (const voice of [...voices.values()]) {
+        detachVoiceImmediate(voice);
+      }
+      if (specs.length === 0) {
+        return;
+      }
+      if (context === null) {
+        context = createContext();
+      }
+      const activeContext = context;
+      const started = specs.map((spec) => startVoice(activeContext, spec.key, spec.frequency));
+      return trackStartedVoices(started, activeContext.resume());
     },
     stopAll(): void {
       if (disposed) {

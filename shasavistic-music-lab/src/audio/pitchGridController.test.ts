@@ -3,7 +3,8 @@
  *
  * ブラウザの音声文脈を使わず、演奏口の代替物で次を確かめる。
  * オン・オフと移動の集合反映、空集合と端での無反映、次元切替の
- * 旧音停止と集合クリア、破棄後の無受付を判定対象とする。
+ * 集合保持と新次元での鳴らし直し、空集合の切替での無生成、
+ * 切替失敗時の非巻き戻し、破棄後の無受付を判定対象とする。
  * 呼び出し記録だけでなく周波数と鍵の対応まで照合し、
  * 呼び出し回数だけを合格証拠にしない。具体値はこの検査に置く。
  */
@@ -16,16 +17,22 @@ import {
 import { soundingFrequencyFor } from './pitchGrid';
 import type { PitchGridSound, PitchGridVoiceSpec } from './pitchGridSound';
 
-/** 演奏口の代替物。集合の反映と停止の呼び出しを記録する。 */
+/** 演奏口の代替物。集合の反映と切替の呼び出しを記録する。 */
 class FakePitchGridSound implements PitchGridSound {
   /** `setVoices` に渡された声の記録。順序と対応付けの照合に使う。 */
   readonly voiceCalls: PitchGridVoiceSpec[][] = [];
+
+  /** `switchDimension` に渡された声の記録。順序と対応付けの照合に使う。 */
+  readonly switchCalls: PitchGridVoiceSpec[][] = [];
 
   stopAllCalls = 0;
 
   disposeCalls = 0;
 
   voiceCount = 0;
+
+  /** 次の切替だけ再開失敗として扱う。再操作での回復を確かめるために使う。 */
+  failNextSwitch = false;
 
   private disposed = false;
 
@@ -34,6 +41,19 @@ class FakePitchGridSound implements PitchGridSound {
       throw new Error('破棄後の演奏口は使えない');
     }
     this.voiceCalls.push([...specs]);
+    this.voiceCount = specs.length;
+  }
+
+  async switchDimension(specs: readonly PitchGridVoiceSpec[]): Promise<void> {
+    if (this.disposed) {
+      throw new Error('破棄後の演奏口は使えない');
+    }
+    this.switchCalls.push([...specs]);
+    if (this.failNextSwitch) {
+      this.failNextSwitch = false;
+      this.voiceCount = 0;
+      throw new Error('再開失敗');
+    }
     this.voiceCount = specs.length;
   }
 
@@ -48,16 +68,32 @@ class FakePitchGridSound implements PitchGridSound {
   }
 }
 
-function createController(): { controller: ReturnType<typeof createPitchGridController>; sound: FakePitchGridSound; notified: () => number } {
+/** 非同期の継続を進める。固定時間の待ちではなく区切りのための譲歩である。 */
+function flush(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+function createController(): {
+  controller: ReturnType<typeof createPitchGridController>;
+  sound: FakePitchGridSound;
+  notified: () => number;
+  createdSounds: () => number;
+} {
   const sound = new FakePitchGridSound();
+  let created = 0;
   let notifyCalls = 0;
   const controller = createPitchGridController({
-    createSound: () => sound,
+    createSound: () => {
+      created += 1;
+      return sound;
+    },
     notify: () => {
       notifyCalls += 1;
     },
   });
-  return { controller, sound, notified: () => notifyCalls };
+  return { controller, sound, notified: () => notifyCalls, createdSounds: () => created };
 }
 
 function expectSnapshot(
@@ -120,21 +156,58 @@ describe('格子操作の単一制御器', () => {
     expectSnapshot(controller.getSnapshot(), 3, [{ x: 2, y: 0 }]);
   });
 
-  it('次元切替は旧音を止めて集合を空にする', () => {
+  it('次元切替はオン集合を保ち新次元で鳴らし直す', () => {
     const { controller, sound } = createController();
     controller.toggle({ x: 0, y: 0 });
     controller.toggle({ x: 1, y: 0 });
-    const callsBefore = sound.voiceCalls.length;
+    const voiceCallsBefore = sound.voiceCalls.length;
     controller.selectDimension(4);
-    // 起動待ちを含めた旧音を止め、空集合の差分呼び出しは重ねないこと。
-    expect(sound.stopAllCalls).toBe(1);
-    expect(sound.voiceCalls).toHaveLength(callsBefore);
+    // 保持した全座標を新次元の周波数で鳴らし直すこと。旧音の停止は切替境界が担い、
+    // 通常の停止と差分反映の重ね呼び出しはしないこと。
+    expect(sound.switchCalls).toHaveLength(1);
+    expect(sound.switchCalls[0]).toEqual([
+      { key: '0,0', frequency: soundingFrequencyFor({ x: 0, y: 0 }, 4) },
+      { key: '1,0', frequency: soundingFrequencyFor({ x: 1, y: 0 }, 4) },
+    ]);
+    expect(sound.stopAllCalls).toBe(0);
+    expect(sound.voiceCalls).toHaveLength(voiceCallsBefore);
+    expectSnapshot(controller.getSnapshot(), 4, [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+    ]);
+  });
+
+  it('空集合の切替では文脈を作らず発音もしない', () => {
+    const { controller, sound, createdSounds } = createController();
+    controller.selectDimension(4);
+    expect(createdSounds()).toBe(0);
+    expect(sound.switchCalls).toHaveLength(0);
+    expect(sound.voiceCalls).toHaveLength(0);
+    expect(sound.stopAllCalls).toBe(0);
+    // 次元の更新だけは保つこと。
     expectSnapshot(controller.getSnapshot(), 4, []);
-    // 新しい縦軸で選び直した点を鳴らせること。
-    controller.toggle({ x: 0, y: 1 });
-    expect(sound.voiceCalls).toHaveLength(callsBefore + 1);
-    expect(sound.voiceCalls[callsBefore]).toEqual([
-      { key: '0,1', frequency: soundingFrequencyFor({ x: 0, y: 1 }, 4) },
+  });
+
+  it('切替の再開失敗でも集合と新次元を保ち再操作で鳴らし直せる', async () => {
+    const { controller, sound } = createController();
+    controller.toggle({ x: 0, y: 0 });
+    sound.failNextSwitch = true;
+    controller.selectDimension(4);
+    await flush();
+    // 巻き戻さず、声だけが外れた状態になること。
+    expectSnapshot(controller.getSnapshot(), 4, [{ x: 0, y: 0 }]);
+    expect(sound.voiceCount).toBe(0);
+    // 次の操作で鳴らし直せること。
+    const voiceCallsBefore = sound.voiceCalls.length;
+    controller.toggle({ x: 1, y: 0 });
+    expect(sound.voiceCalls).toHaveLength(voiceCallsBefore + 1);
+    expect(sound.voiceCalls[voiceCallsBefore]).toEqual([
+      { key: '0,0', frequency: soundingFrequencyFor({ x: 0, y: 0 }, 4) },
+      { key: '1,0', frequency: soundingFrequencyFor({ x: 1, y: 0 }, 4) },
+    ]);
+    expectSnapshot(controller.getSnapshot(), 4, [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
     ]);
   });
 
@@ -144,6 +217,7 @@ describe('格子操作の単一制御器', () => {
     const callsBefore = sound.voiceCalls.length;
     controller.selectDimension(3);
     expect(sound.stopAllCalls).toBe(0);
+    expect(sound.switchCalls).toHaveLength(0);
     expect(sound.voiceCalls).toHaveLength(callsBefore);
     expectSnapshot(controller.getSnapshot(), 3, [{ x: 0, y: 0 }]);
   });
