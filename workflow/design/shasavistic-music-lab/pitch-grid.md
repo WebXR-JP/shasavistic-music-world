@@ -24,6 +24,7 @@
 
 - `workflow/design/shasavistic-music-lab/pitch-grid/pitch-assignment.md`（論理比と発音用配置の正本）
 - `workflow/design/shasavistic-music-lab/pitch-grid/live-audio.md`（個別声と共有文脈の正本）
+- `workflow/design/shasavistic-music-lab/pitch-grid/sounding-piano.md`（鳴り中音高のピアノ対照表示の正本）
 - `workflow/design/shasavistic-music-lab/pitch-grid/theory-intro.md`（奥側の理論説明の表示と文章データの正本）
 
 ## 採用しない案

@@ -87,6 +87,16 @@
       "result": "",
       "operationIds": [],
       "note": ""
+    },
+    "soundingPianoMatchesOperations": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "soundingPianoReadableUnobstructed": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
     }
   },
   "hostAudio": {
