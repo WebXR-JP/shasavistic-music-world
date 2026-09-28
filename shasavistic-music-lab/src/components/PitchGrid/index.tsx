@@ -13,6 +13,7 @@ import {
   type PitchGridControllerSnapshot,
 } from '../../audio/pitchGridController';
 import { TextPlate } from './plates';
+import { SOUNDING_PIANO_POSITION, SOUNDING_PIANO_SIZE, SoundingPiano } from './SoundingPiano';
 
 export interface PitchGridProps {
   /** 格子操作全体の基準位置。ワールド側は配置だけを担う。 */
@@ -123,6 +124,7 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
     dimension: 3,
     points: [],
     voiceCount: 0,
+    soundingVoices: [],
   }));
   // 親操作部品の存続に対応する制御器。演奏口の生成は初回の発音まで遅らせる。
   const controllerRef = useRef<PitchGridController | null>(null);
@@ -158,6 +160,15 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
 
   return (
     <group position={[position[0], position[1], position[2]]}>
+      {/* ========== 鳴り中音高のピアノ対照表示。格子内の固定の非操作面 ========== */}
+      {/* 座標・寸法は格子上方の初期候補であり、実画面の確認で決める。 */}
+      {/* 格子最上段の銘板・移動パッド・次元釦・奥側の理論説明とは重ねない。 */}
+      <SoundingPiano
+        voices={snapshot.soundingVoices}
+        position={SOUNDING_PIANO_POSITION}
+        size={SOUNDING_PIANO_SIZE}
+      />
+
       {/* ========== 格子15点（横5×縦3）。各点のオン・オフを切り替える ========== */}
       {allPitchGridPoints().map((point) => {
         const key = pitchGridKey(point);

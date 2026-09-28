@@ -646,3 +646,127 @@ describe('格子の次元切替の専用境界', () => {
     await sound.dispose();
   });
 });
+
+describe('格子の個別声の表示用保持中一覧', () => {
+  it('再開成立後のみ保持一覧に現れる', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    const release = harness.holdResume();
+    const started = sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    // 再開未成立の声は表示しないこと。
+    expect(sound.soundingVoices).toEqual([]);
+    release();
+    await started;
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 220 }]);
+    await sound.dispose();
+  });
+
+  it('リリース予約で保持一覧から外れる', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    await sound.setVoices([
+      { key: '0,0', frequency: 220 },
+      { key: '1,0', frequency: 330 },
+    ]);
+    expect(calls).toBe(1);
+    // 外れた点だけが表示から外れ、残る声は鍵順で保つこと。
+    await sound.setVoices([{ key: '1,0', frequency: 330 }]);
+    expect(sound.soundingVoices).toEqual([{ key: '1,0', frequency: 330 }]);
+    expect(calls).toBe(2);
+    await sound.dispose();
+  });
+
+  it('再開失敗で保持一覧に残らない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    harness.enqueueResume(() => Promise.reject(new Error('再開失敗')));
+    await expect(sound.setVoices([{ key: '0,0', frequency: 220 }])).rejects.toThrow('再開失敗');
+    // 表示に入らなかった声の切離しは内容変化ではないため知らせないこと。
+    expect(sound.soundingVoices).toEqual([]);
+    expect(calls).toBe(0);
+    await sound.dispose();
+  });
+
+  it('次元切替で保持一覧が入れ替わる', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 220 }]);
+    await sound.switchDimension([{ key: '0,0', frequency: 275 }]);
+    // 旧声の切離しと新声の再開成立で旧周波数は残らないこと。
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 275 }]);
+    await sound.dispose();
+  });
+
+  it('古い終了通知が新しい声の表示を消さない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    await sound.setVoices([{ key: '0,0', frequency: 330 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    const callsBefore = calls;
+    // 旧声の終了通知は所有照合で無視し、新声の表示を保つこと。
+    context.oscillators[0]?.fireEnded();
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    expect(sound.voiceCount).toBe(1);
+    expect(calls).toBe(callsBefore);
+    await sound.dispose();
+  });
+
+  it('破棄で保持一覧が空になる', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(calls).toBe(1);
+    await sound.dispose();
+    expect(sound.soundingVoices).toEqual([]);
+    expect(calls).toBe(2);
+  });
+
+  it('内容不変では通知しない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    const unsubscribe = sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(calls).toBe(1);
+    // 同一集合の再反映は表示内容が変わらないため知らせないこと。
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(calls).toBe(1);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    // 減衰終了の後始末は表示外のため知らせないこと。
+    await sound.setVoices([]);
+    expect(calls).toBe(2);
+    context.oscillators[0]?.fireEnded();
+    expect(calls).toBe(2);
+    // 購読解除後は内容変化でも呼ばないこと。
+    unsubscribe();
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(calls).toBe(2);
+    await sound.dispose();
+  });
+});

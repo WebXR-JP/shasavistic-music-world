@@ -53,6 +53,19 @@ export interface PitchGridVoiceSpec {
 }
 
 /**
+ * 保持中かつ再開成立した一つの声（表示用）。
+ *
+ * 実音高の対照表示だけに使い、発振器などの音声資源は含まない。
+ * 再開未成立・再開失敗で外れた声、減衰の予約後に終了した声は含まない。
+ */
+export interface PitchGridSoundingVoice {
+  /** 声の鍵。座標由来の文字列。 */
+  readonly key: string;
+  /** 発音周波数（Hz）。 */
+  readonly frequency: number;
+}
+
+/**
  * 格子の個別声に必要な音声文脈の最小口。
  *
  * `AudioContext` はこの形を満たす。検査では配線の記録だけを行う
@@ -118,6 +131,26 @@ export interface PitchGridSound {
    * 終了・取消し・破棄で外れた声は数えない。
    */
   readonly voiceCount: number;
+  /**
+   * 保持中かつ再開成立した声の読み取り専用一覧（表示用）。
+   *
+   * 実音高の対照表示の表示源であり、再開未成立・再開失敗で外れた声と
+   * 減衰中の尾音は含まない。発振器などの音声資源は公開しない。
+   * 順序は鍵順に揃え、所有の挿入順には依存しない。
+   */
+  readonly soundingVoices: readonly PitchGridSoundingVoice[];
+  /**
+   * 表示内容が変わったときだけ呼ぶ購読口（表示用）。
+   *
+   * 声の再開成立、リリース予約、再開失敗での切離し、次元切替の一括切離しと
+   * 新声の再開成立、破棄のうち、一覧の内容が変わる場合に限って購読者へ
+   * 知らせる。内容が変わらない再反映や減衰終了では呼ばない。
+   * 毎フレームの読み出しの代わりに使う。任意の音声資源を読む診断口にはしない。
+   *
+   * @param listener - 一覧の内容変化時の通知口。同期的に呼ぶ。
+   * @returns 購読解除口。解除後は呼ばない。
+   */
+  subscribeSounding(listener: () => void): () => void;
   /**
    * 座標集合を声へ反映する（差分の一括反映）。
    *
@@ -301,6 +334,36 @@ export function createPitchGridSound(
   let disposed = false;
   let disposePromise: Promise<void> | null = null;
   let contextClosed = false;
+  // 表示用の購読者。発振器などの音声資源は渡さず、内容変化時の合図だけに使う。
+  const soundingListeners = new Set<() => void>();
+  // 直近に通知した表示内容の照合鍵。内容不変の再反映では通知しないために保つ。
+  let lastSoundingKey = '';
+
+  // 保持中かつ再開成立した声だけを表示用に抜き出す。順序は鍵順に揃える。
+  const snapshotSoundingVoices = (): PitchGridSoundingVoice[] => {
+    const sounding: PitchGridSoundingVoice[] = [];
+    for (const voice of voices.values()) {
+      if (!voice.released && voice.settled) {
+        sounding.push({ key: voice.key, frequency: voice.frequency });
+      }
+    }
+    sounding.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    return sounding;
+  };
+
+  // 表示内容が変わったときだけ購読者へ知らせる。減衰終了など表示外の
+  // 所有変化では照合鍵が変わらず、呼ばない。
+  const emitSoundingIfChanged = (): void => {
+    const sounding = snapshotSoundingVoices();
+    const soundingKey = sounding.map((voice) => `${voice.key}@${voice.frequency}`).join('|');
+    if (soundingKey === lastSoundingKey) {
+      return;
+    }
+    lastSoundingKey = soundingKey;
+    for (const listener of [...soundingListeners]) {
+      listener();
+    }
+  };
 
   // 所有する声があれば即時に止めて切り離す。文脈には触れない。
   // 減衰の予約済みで停止時刻が予約済みの場合は、停止呼び出しを重ねず
@@ -318,6 +381,9 @@ export function createPitchGridSound(
     }
     voice.oscillator.disconnect();
     voice.gain.disconnect();
+    // 保持中の表示声の切離しは表示内容の変化であり、減衰済みや起動待ちの
+    // 切離しは表示外のため照合で通知しない。
+    emitSoundingIfChanged();
   };
 
   // 減衰終了時の後始末。停止は予約済みで実行済みのため切断だけ行う。
@@ -329,6 +395,8 @@ export function createPitchGridSound(
     voices.delete(voice.key);
     voice.oscillator.disconnect();
     voice.gain.disconnect();
+    // 終了する声は減衰の予約時に表示から外れているため、照合で通知しない。
+    emitSoundingIfChanged();
   };
 
   // 一つの声に減衰を予約する。予約済みの再呼び出しは何もしない。
@@ -359,6 +427,9 @@ export function createPitchGridSound(
     voice.oscillator.onended = (): void => {
       detachVoiceOnEnded(voice);
     };
+    // 保持から外れた声は表示から外れる。起動待ちの声の予約は表示外のため
+    // 照合で通知しない。
+    emitSoundingIfChanged();
   };
 
   // 反映する声の並びを検証する。不正入力では音声文脈を作らない。
@@ -435,6 +506,9 @@ export function createPitchGridSound(
           }
           voice.settled = true;
         }
+        // 再開成立した声だけが表示に加わる。取り消された起動は所有外の
+        // ため照合で通知しない。
+        emitSoundingIfChanged();
       },
       (error: unknown) => {
         // 取り消された起動は失敗として扱わず、静かに終える。
@@ -466,6 +540,15 @@ export function createPitchGridSound(
   const sound: PitchGridSound = {
     get voiceCount(): number {
       return voices.size;
+    },
+    get soundingVoices(): readonly PitchGridSoundingVoice[] {
+      return snapshotSoundingVoices();
+    },
+    subscribeSounding(listener: () => void): () => void {
+      soundingListeners.add(listener);
+      return (): void => {
+        soundingListeners.delete(listener);
+      };
     },
     async setVoices(specs: readonly PitchGridVoiceSpec[]): Promise<void> {
       validateSpecs(specs);

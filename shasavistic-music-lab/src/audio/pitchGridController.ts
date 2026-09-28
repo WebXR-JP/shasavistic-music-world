@@ -18,6 +18,7 @@
 import {
   createPitchGridSound,
   type PitchGridSound,
+  type PitchGridSoundingVoice,
   type PitchGridVoiceSpec,
 } from './pitchGridSound';
 import {
@@ -36,6 +37,13 @@ export interface PitchGridControllerSnapshot {
   readonly points: readonly PitchGridPoint[];
   /** 音声側が所有する声の数。減衰の予約後と起動の完了待ちを含む。 */
   readonly voiceCount: number;
+  /**
+   * 音声側で保持中かつ再開成立した声の鍵と周波数（表示用）。
+   *
+   * 選択意図の `points` から周波数を再計算したものではなく、音声側の
+   * 表示一覧をそのまま載せる。再開未成立・再開失敗・減衰中の声は含まない。
+   */
+  readonly soundingVoices: readonly PitchGridSoundingVoice[];
 }
 
 /** 制御器の生成条件。 */
@@ -111,6 +119,8 @@ export function createPitchGridController(
   let sound: PitchGridSound | null = null;
   let disposed = false;
   let disposePromise: Promise<void> | null = null;
+  // 音声側の表示内容変化の購読解除口。演奏口の生成時に購読し、破棄時に外す。
+  let unsubscribeSounding: (() => void) | null = null;
 
   const specsOf = (
     dimension: PitchGridDimension,
@@ -120,6 +130,22 @@ export function createPitchGridController(
       key: pitchGridKey(point),
       frequency: soundingFrequencyFor(point, dimension),
     }));
+
+  // 演奏口の生成は初回の発音まで遅らせる。生成時に音声側の表示内容変化を
+  // 購読し、制御器の既存通知へ転送する。表示の快照取得と通知の接続だけが
+  // 目的であり、音声資源の読出しには使わない。
+  const ensureSound = (): PitchGridSound => {
+    if (sound === null) {
+      const created = createSound();
+      unsubscribeSounding = created.subscribeSounding(() => {
+        if (!disposed) {
+          notify();
+        }
+      });
+      sound = created;
+    }
+    return sound;
+  };
 
   // 現在の集合を音声側へ反映する。差分の取捨は音声側が担う。
   // 再開の失敗時は声だけが外れ、状態の意図は保つ。再操作で鳴らし直せる。
@@ -150,6 +176,7 @@ export function createPitchGridController(
         dimension: snapshot.dimension,
         points: snapshot.points,
         voiceCount: sound === null ? 0 : sound.voiceCount,
+        soundingVoices: sound === null ? [] : sound.soundingVoices,
       };
     },
     toggle(point: PitchGridPoint): void {
@@ -158,8 +185,8 @@ export function createPitchGridController(
       }
       // 格子外の座標では文脈を作らずに拒む。対応付けの破れを表面化させる。
       const snapshot = state.toggle(point);
-      if (sound === null && snapshot.points.length > 0) {
-        sound = createSound();
+      if (snapshot.points.length > 0) {
+        ensureSound();
       }
       reflect(snapshot.dimension, snapshot.points);
       notify();
@@ -191,14 +218,11 @@ export function createPitchGridController(
         notify();
         return;
       }
-      if (sound === null) {
-        sound = createSound();
-      }
+      const created = ensureSound();
       // 切替専用の境界で旧声を止め、保持した全座標を新次元で鳴らし直す。
       // 再開の失敗時は声だけが外れ、集合と新次元は保つ。再操作で鳴らし直せる。
-      const active = sound;
       const specs = specsOf(result.snapshot.dimension, result.snapshot.points);
-      void active
+      void created
         .switchDimension(specs)
         .then(() => {
           if (!disposed) {
@@ -220,6 +244,9 @@ export function createPitchGridController(
       disposed = true;
       const active = sound;
       sound = null;
+      const unsubscribe = unsubscribeSounding;
+      unsubscribeSounding = null;
+      unsubscribe?.();
       if (active === null) {
         disposePromise = Promise.resolve();
         return disposePromise;

@@ -15,7 +15,11 @@ import {
   type PitchGridControllerSnapshot,
 } from './pitchGridController';
 import { soundingFrequencyFor } from './pitchGrid';
-import type { PitchGridSound, PitchGridVoiceSpec } from './pitchGridSound';
+import type {
+  PitchGridSound,
+  PitchGridSoundingVoice,
+  PitchGridVoiceSpec,
+} from './pitchGridSound';
 
 /** 演奏口の代替物。集合の反映と切替の呼び出しを記録する。 */
 class FakePitchGridSound implements PitchGridSound {
@@ -35,6 +39,41 @@ class FakePitchGridSound implements PitchGridSound {
   failNextSwitch = false;
 
   private disposed = false;
+
+  /** 表示用の保持中一覧。検査用の設定口で差し替える。 */
+  private sounding: PitchGridSoundingVoice[] = [];
+
+  private readonly soundingListeners = new Set<() => void>();
+
+  get soundingVoices(): readonly PitchGridSoundingVoice[] {
+    return [...this.sounding];
+  }
+
+  subscribeSounding(listener: () => void): () => void {
+    this.soundingListeners.add(listener);
+    return (): void => {
+      this.soundingListeners.delete(listener);
+    };
+  }
+
+  /**
+   * 検査用に表示用の保持中一覧を差し替えて購読者へ知らせる。
+   *
+   * 音声側の再開成立・リリースなどの内容変化を模す。集合の反映では
+   * 自動で変えず、選択意図と表示の食い違いを確かめられるようにする。
+   *
+   * @param voices - 差し替える保持中一覧。
+   */
+  setSoundingForTest(voices: readonly PitchGridSoundingVoice[]): void {
+    this.sounding = [...voices];
+    for (const listener of [...this.soundingListeners]) {
+      listener();
+    }
+  }
+
+  soundingListenerCountForTest(): number {
+    return this.soundingListeners.size;
+  }
 
   async setVoices(specs: readonly PitchGridVoiceSpec[]): Promise<void> {
     if (this.disposed) {
@@ -65,6 +104,7 @@ class FakePitchGridSound implements PitchGridSound {
     this.disposeCalls += 1;
     this.disposed = true;
     this.voiceCount = 0;
+    this.sounding = [];
   }
 }
 
@@ -256,5 +296,51 @@ describe('格子操作の単一制御器', () => {
     });
     await controller.dispose();
     expect(created).toBe(0);
+  });
+});
+
+describe('格子操作の単一制御器の表示用保持中一覧', () => {
+  it('快照の表示用一覧は音声側の保持一覧を反映する', () => {
+    const { controller, sound } = createController();
+    controller.toggle({ x: 0, y: 0 });
+    // 音声側の再開成立を模し、表示用の保持中一覧だけを差し替えること。
+    const frequency = soundingFrequencyFor({ x: 0, y: 0 }, 3);
+    sound.setSoundingForTest([{ key: '0,0', frequency }]);
+    expect(controller.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
+  });
+
+  it('選択意図と表示一覧が食い違っても混同しない', () => {
+    const { controller, sound } = createController();
+    controller.toggle({ x: 0, y: 0 });
+    controller.toggle({ x: 1, y: 0 });
+    // 再開未成立を模し、表示一覧は空のままにすること。選択意図の座標集合は
+    // 保ち、表示一覧の再計算や声数の推定で埋めないこと。
+    expect(controller.getSnapshot().points).toEqual([
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+    ]);
+    expect(controller.getSnapshot().soundingVoices).toEqual([]);
+    expect(sound.voiceCount).toBe(2);
+  });
+
+  it('音声側の内容変化通知を既存の通知へ届ける', () => {
+    const { controller, sound, notified } = createController();
+    controller.toggle({ x: 0, y: 0 });
+    const callsBefore = notified();
+    const frequency = soundingFrequencyFor({ x: 0, y: 0 }, 3);
+    sound.setSoundingForTest([{ key: '0,0', frequency }]);
+    // 音声側の購読が制御器の既存通知へ転送され、快照が新しい一覧を返すこと。
+    expect(notified()).toBeGreaterThan(callsBefore);
+    expect(controller.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
+  });
+
+  it('破棄後は音声側の内容変化通知を届けない', async () => {
+    const { controller, sound, notified } = createController();
+    controller.toggle({ x: 0, y: 0 });
+    await controller.dispose();
+    const callsBefore = notified();
+    sound.setSoundingForTest([{ key: '0,0', frequency: 220 }]);
+    expect(notified()).toBe(callsBefore);
+    expect(sound.soundingListenerCountForTest()).toBe(0);
   });
 });
