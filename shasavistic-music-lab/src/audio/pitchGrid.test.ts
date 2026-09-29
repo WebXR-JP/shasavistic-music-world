@@ -151,9 +151,11 @@ interface OracleChoice {
 /**
  * 小集合の最適配置を全列挙で求める独立オラクル。
  *
- * 実装の動的計画法とは別に直積をすべて評価し、間隔は発音周波数の
- * 対数差、中央寄せは発音周波数の対数と音域対数中心の差で求める。
- * 同値は固定座標順の `k` 列の辞書順で小さい方を選ぶ。
+ * 実装の動的計画法とは別に直積をすべて評価する。間隔は発音周波数の
+ * 対数差で求め、比較順は上限付き最短間隔、近さの二乗和、中央寄せ、
+ * 固定座標順の `k` 列の辞書順（小さい方）とする。間隔の求め方も
+ * 中央寄せの求め方も実装とは別手順とし、候補の列挙だけを共有しない
+ * 独立の範囲絞りで行う。
  * 準最適との差が微小な検証集合は使わず、その場合は失敗させる。
  */
 function oracleAssign(
@@ -166,16 +168,20 @@ function oracleAssign(
     candidates: oracleCandidates(point, dimension),
   }));
   const centerLog = (Math.log2(PITCH_GRID_SOUND_LOW_HZ) + Math.log2(PITCH_GRID_SOUND_HIGH_HZ)) / 2;
-  // 比較順は第一目的、第二目的、固定座標順の `k` 列の辞書順（小さい方）とする。
+  // 比較順は上限付き最短間隔（大きい方）、近さの二乗和、中央寄せ、
+  // 固定座標順の `k` 列の辞書順（小さい方）とする。
   const compareChoices = (
-    a: { first: number; second: number; ks: readonly number[] },
-    b: { first: number; second: number; ks: readonly number[] },
+    a: { capped: number; closeness: number; center: number; ks: readonly number[] },
+    b: { capped: number; closeness: number; center: number; ks: readonly number[] },
   ): number => {
-    if (a.first !== b.first) {
-      return a.first < b.first ? -1 : 1;
+    if (a.capped !== b.capped) {
+      return a.capped > b.capped ? -1 : 1;
     }
-    if (a.second !== b.second) {
-      return a.second < b.second ? -1 : 1;
+    if (a.closeness !== b.closeness) {
+      return a.closeness < b.closeness ? -1 : 1;
+    }
+    if (a.center !== b.center) {
+      return a.center < b.center ? -1 : 1;
     }
     for (let index = 0; index < a.ks.length; index += 1) {
       if (a.ks[index] < b.ks[index]) {
@@ -187,24 +193,39 @@ function oracleAssign(
     }
     return 0;
   };
-  const evaluated: Array<{ first: number; second: number; ks: number[] }> = [];
+  const evaluated: Array<{ capped: number; closeness: number; center: number; ks: number[] }> = [];
   const chosen: OracleCandidate[] = [];
   const evaluate = (): void => {
     const sounding = chosen
       .map((candidate, index) => ({ ...candidate, order: index }))
       .sort((a, b) => a.frequency - b.frequency || a.order - b.order || a.k - b.k);
-    let first = 0;
+    let minGap = Number.POSITIVE_INFINITY;
     for (let index = 1; index < sounding.length; index += 1) {
-      const gap = Math.log2(sounding[index].frequency / sounding[index - 1].frequency);
-      const diff = gap - 0.25;
-      first += diff * diff + (gap < 0.25 ? diff * diff : 0);
+      const gap =
+        sounding[index].frequency === sounding[index - 1].frequency
+          ? 0
+          : Math.log2(sounding[index].frequency / sounding[index - 1].frequency);
+      if (gap < minGap) {
+        minGap = gap;
+      }
     }
-    let second = 0;
+    // 単音には隣接間隔がなく、上限付き最短間隔と近さの比較対象にならない。
+    const capped = sounding.length < 2 ? Number.POSITIVE_INFINITY : Math.min(minGap, 0.25);
+    let closeness = 0;
+    for (let index = 1; index < sounding.length; index += 1) {
+      const gap =
+        sounding[index].frequency === sounding[index - 1].frequency
+          ? 0
+          : Math.log2(sounding[index].frequency / sounding[index - 1].frequency);
+      const diff = gap - 0.25;
+      closeness += diff * diff;
+    }
+    let center = 0;
     for (const candidate of chosen) {
       const deviation = Math.log2(candidate.frequency) - centerLog;
-      second += deviation * deviation;
+      center += deviation * deviation;
     }
-    evaluated.push({ first, second, ks: chosen.map((candidate) => candidate.k) });
+    evaluated.push({ capped, closeness, center, ks: chosen.map((candidate) => candidate.k) });
   };
   const recurse = (index: number): void => {
     if (index === perPoint.length) {
@@ -225,12 +246,25 @@ function oracleAssign(
   // 準最適との差が微小だと、間隔・偏差の求め方の違いによる丸めで
   // 判定が揺れるため、そのような検証集合は使わない。
   // 完全な同値（差がちょうどゼロ）は `k` 列の辞書順で決まるため許容する。
+  // 単音の上限付き最短間隔は比較対象外のため、余裕の判定から外す。
   if (runnerUp !== null) {
-    const firstMargin = runnerUp.first - best.first;
-    const secondMargin = runnerUp.second - best.second;
+    // 単音は両者とも比較対象外の `+∞` になるため、余裕ゼロとして扱う。
+    const cappedMargin =
+      best.capped === Number.POSITIVE_INFINITY &&
+      runnerUp.capped === Number.POSITIVE_INFINITY
+        ? 0
+        : best.capped - runnerUp.capped;
+    const closenessMargin = runnerUp.closeness - best.closeness;
+    const centerMargin = runnerUp.center - best.center;
     const tight =
-      (firstMargin > 0 && firstMargin < 1e-9) ||
-      (firstMargin === 0 && secondMargin > 0 && secondMargin < 1e-9);
+      (best.capped !== Number.POSITIVE_INFINITY &&
+        cappedMargin > 0 &&
+        cappedMargin < 1e-9) ||
+      (cappedMargin === 0 && closenessMargin > 0 && closenessMargin < 1e-9) ||
+      (cappedMargin === 0 &&
+        closenessMargin === 0 &&
+        centerMargin > 0 &&
+        centerMargin < 1e-9);
     expect(tight, '検証集合が準最適に近接しすぎる').toBe(false);
   }
   return { keys: perPoint.map((entry) => entry.key), ks: best.ks };
@@ -242,8 +276,9 @@ describe('集合単位の発音配置', () => {
   });
 
   it('中央の単音は中央寄せで440Hzになる', () => {
-    // 第一目的ゼロ・第二目的同値の 440Hz と 880Hz のうち、
-    // 固定座標順の `k` 列の辞書順で小さい方（`k = 1`）を選ぶこと。
+    // 単音は第一・第二の比較対象外であり、中央寄せと `k` 列で決まる。
+    // 440Hz と 880Hz は中央偏差が同値のため、`k` 列の辞書順で小さい方
+    // （`k = 1`）を選ぶこと。
     // 中央だけをオンにしたときに220Hzへ固定しないことも確かめる。
     expect(assignPitchGridFrequencies([{ x: 0, y: 0 }], 3)).toEqual([
       { key: '0,0', frequency: 440 },
@@ -268,8 +303,9 @@ describe('集合単位の発音配置', () => {
     }
   });
 
-  it('二音でも目標への近さを評価する', () => {
-    // 660Hz と 880Hz の間隔が目標1/4オクターブに最も近く、
+  it('二音では短すぎない間隔を優先し目標への近さで決める', () => {
+    // 上限付き最短間隔が目標に達する配置の中では、間隔の目標への近さと
+    // 中央寄せで決まること。660Hz と 880Hz の間隔は目標以上で目標に最も近く、
     // 中央寄せとの両立でも最良になること。
     expect(
       assignPitchGridFrequencies(
@@ -393,13 +429,13 @@ describe('集合単位の発音配置', () => {
       },
       {
         points: [
-          { x: -2, y: 0 },
+          { x: -2, y: 1 },
           { x: -1, y: 0 },
-          { x: 0, y: 0 },
-          { x: 1, y: 0 },
+          { x: 0, y: -1 },
+          { x: 1, y: 1 },
           { x: 2, y: 0 },
         ],
-        dimension: 4,
+        dimension: 5,
       },
     ];
     for (const { points, dimension } of sets) {

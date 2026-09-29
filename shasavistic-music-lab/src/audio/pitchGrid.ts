@@ -210,7 +210,8 @@ export interface PitchGridAssignedVoice {
   readonly frequency: number;
 }
 
-// 目標とする隣接間隔（オクターブ単位）。1/4オクターブ。
+// 隣接間隔の目標の上限（オクターブ単位）。1/4オクターブ。
+// 最短間隔の最大化に上限を設け、小集合が必要以上に拡散しないようにする。
 const TARGET_GAP_OCTAVES = 0.25;
 
 // 発音域 `[220, 1760]` はちょうど3オクターブであり、対数上の中心は
@@ -233,18 +234,26 @@ interface PitchGridAssignCandidate {
   readonly frequency: number;
   /** 対数比（`log2(分子) − log2(分母)`）。間隔の算出に使う。 */
   readonly logRatio: number;
-  /** 中央からの偏差の平方（第二目的の加算分）。 */
+  /** 中央からの偏差の平方（第三目的の加算分）。 */
   readonly centerDeviationSquared: number;
   /** 全候補中の順位（周波数昇順、同値なら固定座標順、さらに `k` 昇順）。 */
   rank: number;
 }
 
-/** 配置の動的計画法の状態1件分の内部表現。 */
+/** 第一段で扱う到達状態の内部表現。 */
+interface PitchGridBottleneckState {
+  /** 選択済み座標の集合（固定座標順の位置のビット列）。 */
+  readonly mask: number;
+  /** 最後に選んだ候補の順位。 */
+  readonly rank: number;
+}
+
+/** 第二段の動的計画法の状態1件分の内部表現。 */
 interface PitchGridAssignEntry {
-  /** 第一目的（隣接間隔の目標からのずれ）の累積。 */
-  readonly first: number;
-  /** 第二目的（中央からの偏差平方和）の累積。 */
-  readonly second: number;
+  /** 近さ（隣接間隔の目標からのずれの二乗和）の累積。 */
+  readonly closeness: number;
+  /** 中央からの偏差平方和の累積。 */
+  readonly center: number;
   /** 一つ前の状態。初期状態では `null`。 */
   readonly prev: PitchGridAssignEntry | null;
   /** 最後に選んだ候補の順位。 */
@@ -257,14 +266,17 @@ interface PitchGridAssignEntry {
  * オン集合単位で発音周波数の配置を求める。
  *
  * 論理比を変えず、2の整数冪の移動だけを使う。選んだ周波数を昇順に並べ、
- * 隣接間隔の目標（1/4オクターブ）からのずれを第一目的、発音域の対数上の
- * 中心からの偏差平方和を第二目的とし、さらに同値なら固定座標順の `k` 列の
- * 辞書順で小さい方を選ぶ。動的計画法で厳密解を求め、近似を使わない。
+ * 上限付き最短間隔（最小隣接間隔と1/4オクターブの小さい方）の最大化を
+ * 第一目的、隣接間隔の目標からのずれの二乗和を第二目的、発音域の対数上の
+ * 中心からの偏差平方和を第三目的とし、さらに同値なら固定座標順の `k` 列の
+ * 辞書順で小さい方を選ぶ。二段階の動的計画法で厳密解を求め、近似を使わない。
  *
- * 状態は選択済み座標集合と最後の候補とし、順位の低い方から遷移を確定する。
- * 比較・加算の順序は入力順に依存しないため、処理順・操作履歴が結果を変えない。
- * 浮動小数点は有限値を前提に固定式・固定加算順で通常の数値比較とし、
- * 任意のしきい値による「ほぼ同値」を設けない。
+ * 第一段で到達可能な最大の最短間隔から閾値を定め、第二段はその閾値を満たす
+ * 遷移だけに限る。状態は選択済み座標集合と最後の候補とし、順位の低い方から
+ * 遷移を確定する。比較・加算の順序は入力順に依存しないため、処理順・
+ * 操作履歴が結果を変えない。浮動小数点は有限値を前提に固定式・固定加算順で
+ * 通常の数値比較とし、任意のしきい値による「ほぼ同値」を設けない
+ * （単一候補初期の `+∞` を除く）。
  *
  * @param points - オン集合の座標列。順序は結果に影響しない。
  * @param dimension - 選択次元。
@@ -328,8 +340,25 @@ export function assignPitchGridFrequencies(
   const total = all.length;
   const byRank: PitchGridAssignCandidate[] = [...all].sort((a, b) => a.rank - b.rank);
 
+  // 候補対の隣接間隔を一度だけ計算し、両段で共有する。
+  // 隣接間隔は論理比同士の比と両候補の `k` の差から求める対数間隔とし、
+  // 絶対周波数同士の除算では求めない。
+  // 将来同値の候補が出た場合は間隔ゼロとして評価し、一声にまとめない。
+  // 遷移は順位の低い方から高い方への向きだけを使う。
+  const gaps: number[][] = Array.from({ length: total }, () => new Array<number>(total).fill(0));
+  for (let low = 0; low < total; low += 1) {
+    const last = byRank[low];
+    for (let high = low + 1; high < total; high += 1) {
+      const next = byRank[high];
+      gaps[low][high] =
+        next.frequency === last.frequency
+          ? 0
+          : next.logRatio - last.logRatio + (next.k - last.k);
+    }
+  }
+
   // 経路の `k` 列を固定座標順に復元する。通常の比較では呼ばず、
-  // 第一目的・第二目的が同値の経路の比較にだけ使う。
+  // 近さ・中央偏差が同値の経路の比較にだけ使う。
   const columnOf = (entry: PitchGridAssignEntry): number[] => {
     const column = new Array<number>(count).fill(Number.NaN);
     let current: PitchGridAssignEntry | null = entry;
@@ -340,14 +369,14 @@ export function assignPitchGridFrequencies(
     }
     return column;
   };
-  // 比較順は第一目的、第二目的、固定座標順の `k` 列の辞書順（小さい方）とする。
+  // 比較順は近さ、中央偏差、固定座標順の `k` 列の辞書順（小さい方）とする。
   // 未選択の位置は両経路とも `NaN` であり、大小比較では等しく扱われる。
   const isBetter = (next: PitchGridAssignEntry, current: PitchGridAssignEntry): boolean => {
-    if (next.first !== current.first) {
-      return next.first < current.first;
+    if (next.closeness !== current.closeness) {
+      return next.closeness < current.closeness;
     }
-    if (next.second !== current.second) {
-      return next.second < current.second;
+    if (next.center !== current.center) {
+      return next.center < current.center;
     }
     const nextColumn = columnOf(next);
     const currentColumn = columnOf(current);
@@ -362,15 +391,74 @@ export function assignPitchGridFrequencies(
     return false;
   };
 
+  // 第一段：上限付き最短間隔の最大化。到達経路の最大ボトルネックを保持する。
+  // 単一候補は `+∞` から開始し、遷移値は `min(現在値, gap)` とする。
+  // 遷移先は必ず高い順位のため、順位の低い方から確定すれば到達値が出そろう。
+  const bottleneckOf = new Map<number, number>();
+  const bottleneckBuckets: PitchGridBottleneckState[][] = Array.from(
+    { length: total },
+    () => [],
+  );
+  for (const candidate of all) {
+    const mask = 1 << candidate.coordIndex;
+    bottleneckOf.set(mask * total + candidate.rank, Number.POSITIVE_INFINITY);
+    bottleneckBuckets[candidate.rank].push({ mask, rank: candidate.rank });
+  }
+  const settledFirst = new Set<number>();
+  for (let rank = 0; rank < total; rank += 1) {
+    for (const state of bottleneckBuckets[rank]) {
+      const key = state.mask * total + state.rank;
+      if (settledFirst.has(key)) {
+        continue;
+      }
+      settledFirst.add(key);
+      const current = bottleneckOf.get(key);
+      if (current === undefined) {
+        continue;
+      }
+      for (let index = 0; index < count; index += 1) {
+        if ((state.mask & (1 << index)) !== 0) {
+          continue;
+        }
+        for (const next of perCoord[index]) {
+          if (next.rank <= rank) {
+            continue;
+          }
+          const value = Math.min(current, gaps[rank][next.rank]);
+          const nextKey = (state.mask | (1 << index)) * total + next.rank;
+          const kept = bottleneckOf.get(nextKey);
+          if (kept === undefined || value > kept) {
+            bottleneckOf.set(nextKey, value);
+            bottleneckBuckets[next.rank].push({ mask: state.mask | (1 << index), rank: next.rank });
+          }
+        }
+      }
+    }
+  }
+  const fullMask = (1 << count) - 1;
+  let bottleneckStar = Number.NEGATIVE_INFINITY;
+  for (const candidate of all) {
+    const value = bottleneckOf.get(fullMask * total + candidate.rank);
+    if (value !== undefined && value > bottleneckStar) {
+      bottleneckStar = value;
+    }
+  }
+  if (bottleneckStar === Number.NEGATIVE_INFINITY) {
+    throw new Error('発音配置が求まらない');
+  }
+  // 閾値は到達可能な最大の最短間隔と目標の小さい方とする。
+  // 単音では隣接間隔がなく `+∞` のため目標そのものになる。
+  const threshold = Math.min(bottleneckStar, TARGET_GAP_OCTAVES);
+
   const states = new Map<number, PitchGridAssignEntry>();
   const buckets: PitchGridAssignEntry[][] = Array.from({ length: total }, () => []);
-  // 単一候補を初期状態とし、第一目的ゼロ、第二目的にその候補の
+  // 単一候補を初期状態とし、近さゼロ、中央偏差にその候補の
   // 中央からの偏差の平方を加える。
   for (const candidate of all) {
     const mask = 1 << candidate.coordIndex;
     const entry: PitchGridAssignEntry = {
-      first: 0,
-      second: candidate.centerDeviationSquared,
+      closeness: 0,
+      center: candidate.centerDeviationSquared,
       prev: null,
       rank: candidate.rank,
       mask,
@@ -378,6 +466,7 @@ export function assignPitchGridFrequencies(
     states.set(mask * total + candidate.rank, entry);
     buckets[candidate.rank].push(entry);
   }
+  // 第二段：閾値を満たす遷移だけを許す加算の動的計画法。
   // 順位の低い方から遷移を確定する。遷移先は必ず高い順位のため、
   // その順位の処理時点では到達経路が出そろっている。
   for (let rank = 0; rank < total; rank += 1) {
@@ -385,7 +474,6 @@ export function assignPitchGridFrequencies(
       if (states.get(entry.mask * total + entry.rank) !== entry) {
         continue;
       }
-      const last = byRank[entry.rank];
       for (let index = 0; index < count; index += 1) {
         if ((entry.mask & (1 << index)) !== 0) {
           continue;
@@ -394,21 +482,16 @@ export function assignPitchGridFrequencies(
           if (next.rank <= rank) {
             continue;
           }
-          // 隣接間隔は論理比同士の比と両候補の `k` の差から求める対数間隔とし、
-          // 絶対周波数同士の除算では求めない。
-          let gap = next.logRatio - last.logRatio + (next.k - last.k);
-          if (next.frequency === last.frequency) {
-            // 将来同値の候補が出た場合は間隔ゼロとして評価し、一声にまとめない。
-            gap = 0;
+          const gap = gaps[rank][next.rank];
+          if (gap < threshold) {
+            continue;
           }
           const diff = gap - TARGET_GAP_OCTAVES;
-          // 過小間隔の追加罰として、目標未満では差の平方を二重に数える。
-          const step = diff * diff + (gap < TARGET_GAP_OCTAVES ? diff * diff : 0);
           const mask = entry.mask | (1 << index);
           const key = mask * total + next.rank;
           const relaxed: PitchGridAssignEntry = {
-            first: entry.first + step,
-            second: entry.second + next.centerDeviationSquared,
+            closeness: entry.closeness + diff * diff,
+            center: entry.center + next.centerDeviationSquared,
             prev: entry,
             rank: next.rank,
             mask,
@@ -422,7 +505,6 @@ export function assignPitchGridFrequencies(
       }
     }
   }
-  const fullMask = (1 << count) - 1;
   let best: PitchGridAssignEntry | null = null;
   for (const entry of states.values()) {
     if (entry.mask !== fullMask) {
