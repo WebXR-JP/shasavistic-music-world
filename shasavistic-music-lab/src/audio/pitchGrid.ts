@@ -1,11 +1,12 @@
 /**
- * 格子点の座標・論理比・発音周波数とオン集合の状態遷移。
+ * 格子点の座標・論理比・発音用配置とオン集合の状態遷移。
  *
  * 横 `-2…2`・縦 `-1…1` の15点を範囲とし、横軸の素数を `3`、
  * 縦軸の素数を選択次元に応じ `5`・`7`・`11` とする。
  * 座標 `(x, y)` の論理比 `3^x p^y` は関係として保持し、
- * 発音周波数は基準周波数からの比を2の整数冪だけ移して
- * `[220, 440) Hz` に収める。論理比と発音用配置を混同しない。
+ * 発音周波数はオン集合単位の配置関数が基準周波数からの比を
+ * 2の整数冪だけ移して `220…1760 Hz`（両端を含む）に収める。
+ * 論理比と発音用配置を混同しない。
  * 右・上へ進むことが常に実音の上昇とは扱わない。
  *
  * 音声文脈や声の寿命は扱わず、発音側（`pitchGridSound`）と
@@ -51,8 +52,8 @@ export const PITCH_GRID_BASE_FREQUENCY_HZ = 220;
 /** 発音周波数の収容区間の下端（Hz）。この値を含む。 */
 export const PITCH_GRID_SOUND_LOW_HZ = 220;
 
-/** 発音周波数の収容区間の上端（Hz）。この値は含まない。 */
-export const PITCH_GRID_SOUND_HIGH_HZ = 440;
+/** 発音周波数の収容区間の上端（Hz）。この値を含む。 */
+export const PITCH_GRID_SOUND_HIGH_HZ = 1760;
 
 /** 横軸の素数。 */
 export const PITCH_GRID_HORIZONTAL_PRIME = 3;
@@ -147,36 +148,308 @@ export function logicalRatioFor(
 }
 
 /**
- * 座標の発音周波数を返す。
+ * オン集合の1点が取り得る発音域内の候補。
+ *
+ * `k` は2の整数冪の移動量であり、周波数は
+ * `基準周波数 × 論理比 × 2^k` で求める。
+ * 論理比そのものは変えない。
+ */
+export interface PitchGridSoundingCandidate {
+  /** 座標の鍵（`x,y` 形式）。 */
+  readonly key: string;
+  /** 2の整数冪の移動量。 */
+  readonly k: number;
+  /** 発音域に収まる周波数（Hz）。両端を含む。 */
+  readonly frequency: number;
+}
+
+/**
+ * 座標が発音域に収まる候補の一覧を返す。
  *
  * 基準周波数に論理比を掛けた値を2の整数冪だけ移し、
- * `[220, 440) Hz` に収める。論理比そのものは変えず、
- * 発音用配置だけを求める。
+ * 発音域に入る整数 `k` をすべて列挙する。周波数昇順
+ *（`k` 昇順と同じ）に並べる。
  *
  * @param point - 格子点。範囲内であること。
  * @param dimension - 選択次元。
- * @param baseFrequency - 基準周波数（Hz）。正の有限値。省略時は暫定設計値。
- * @returns 収容区間に収めた発音周波数（Hz）。
+ * @returns 発音域に収まる候補の一覧。空にはならない。
  * @throws `Error` — 格子外の座標の場合。
- * @throws `RangeError` — 選択次元でない、基準周波数が正の有限値でない場合。
+ * @throws `RangeError` — 選択次元でない場合。
  */
-export function soundingFrequencyFor(
+export function soundingCandidatesFor(
   point: PitchGridPoint,
   dimension: PitchGridDimension,
-  baseFrequency: number = PITCH_GRID_BASE_FREQUENCY_HZ,
-): number {
+): PitchGridSoundingCandidate[] {
   const ratio = logicalRatioFor(point, dimension);
-  if (!Number.isFinite(baseFrequency) || baseFrequency <= 0) {
-    throw new RangeError(`基準周波数は正の有限値であること: ${String(baseFrequency)}`);
+  const key = pitchGridKey(point);
+  // 対数比から k の範囲を絞り、周波数の両端比較で確定する。
+  // 任意のしきい値による丸め補正は設けず、通常の数値比較だけを使う。
+  const logRatio = Math.log2(ratio.numerator) - Math.log2(ratio.denominator);
+  const minK = Math.ceil(-logRatio);
+  const maxK = Math.floor(3 - logRatio);
+  const candidates: PitchGridSoundingCandidate[] = [];
+  for (let k = minK; k <= maxK; k += 1) {
+    const frequency =
+      ((PITCH_GRID_BASE_FREQUENCY_HZ * ratio.numerator) / ratio.denominator) * 2 ** k;
+    if (frequency >= PITCH_GRID_SOUND_LOW_HZ && frequency <= PITCH_GRID_SOUND_HIGH_HZ) {
+      candidates.push({ key, k, frequency });
+    }
   }
-  let frequency = (baseFrequency * ratio.numerator) / ratio.denominator;
-  while (frequency < PITCH_GRID_SOUND_LOW_HZ) {
-    frequency *= 2;
+  return candidates;
+}
+
+/**
+ * 集合単位の配置結果の1声分。鍵と発音周波数の組。
+ *
+ * 全声仕様を作る材料であり、声の寿命や利得は含まない。
+ */
+export interface PitchGridAssignedVoice {
+  /** 座標の鍵（`x,y` 形式）。 */
+  readonly key: string;
+  /** 配置で選ばれた発音周波数（Hz）。発音域に収まる。 */
+  readonly frequency: number;
+}
+
+// 目標とする隣接間隔（オクターブ単位）。1/4オクターブ。
+const TARGET_GAP_OCTAVES = 0.25;
+
+// 発音域 `[220, 1760]` はちょうど3オクターブであり、対数上の中心は
+// 下端から1.5オクターブにある。下端と基準周波数は等しいため、
+// 各候補の中心からの偏差（オクターブ単位）は論理比の対数と `k` だけから求まる。
+// 基準周波数の対数と中心の対数を経由して差を取ると、仕様上同値の候補
+// （例: 中央単音の `440Hz` と `880Hz`）が浮動小数点の丸めで同値にならなくなる。
+// 基準周波数と下端の等しさは数学的に打ち消せるため、差だけの形に固定する。
+// 前提: `PITCH_GRID_SOUND_LOW_HZ` と `PITCH_GRID_BASE_FREQUENCY_HZ` が等しく、
+// 上端が下端の8倍（3オクターブ）であること。定数を変える場合はこの式を見直す。
+const CENTER_OFFSET_OCTAVES = 1.5;
+
+/** 配置の動的計画法で扱う候補1件分の内部表現。 */
+interface PitchGridAssignCandidate {
+  /** 固定座標順に並べた座標列の中の位置。 */
+  readonly coordIndex: number;
+  /** 2の整数冪の移動量。 */
+  readonly k: number;
+  /** 発音域に収まる周波数（Hz）。 */
+  readonly frequency: number;
+  /** 対数比（`log2(分子) − log2(分母)`）。間隔の算出に使う。 */
+  readonly logRatio: number;
+  /** 中央からの偏差の平方（第二目的の加算分）。 */
+  readonly centerDeviationSquared: number;
+  /** 全候補中の順位（周波数昇順、同値なら固定座標順、さらに `k` 昇順）。 */
+  rank: number;
+}
+
+/** 配置の動的計画法の状態1件分の内部表現。 */
+interface PitchGridAssignEntry {
+  /** 第一目的（隣接間隔の目標からのずれ）の累積。 */
+  readonly first: number;
+  /** 第二目的（中央からの偏差平方和）の累積。 */
+  readonly second: number;
+  /** 一つ前の状態。初期状態では `null`。 */
+  readonly prev: PitchGridAssignEntry | null;
+  /** 最後に選んだ候補の順位。 */
+  readonly rank: number;
+  /** 選択済み座標の集合（固定座標順の位置のビット列）。 */
+  readonly mask: number;
+}
+
+/**
+ * オン集合単位で発音周波数の配置を求める。
+ *
+ * 論理比を変えず、2の整数冪の移動だけを使う。選んだ周波数を昇順に並べ、
+ * 隣接間隔の目標（1/4オクターブ）からのずれを第一目的、発音域の対数上の
+ * 中心からの偏差平方和を第二目的とし、さらに同値なら固定座標順の `k` 列の
+ * 辞書順で小さい方を選ぶ。動的計画法で厳密解を求め、近似を使わない。
+ *
+ * 状態は選択済み座標集合と最後の候補とし、順位の低い方から遷移を確定する。
+ * 比較・加算の順序は入力順に依存しないため、処理順・操作履歴が結果を変えない。
+ * 浮動小数点は有限値を前提に固定式・固定加算順で通常の数値比較とし、
+ * 任意のしきい値による「ほぼ同値」を設けない。
+ *
+ * @param points - オン集合の座標列。順序は結果に影響しない。
+ * @param dimension - 選択次元。
+ * @returns 固定座標順に並べた鍵と発音周波数の一覧。空集合には空の一覧を返す。
+ * @throws `Error` — 格子外の座標や重複した座標がある場合。
+ * @throws `RangeError` — 選択次元でない場合。
+ */
+export function assignPitchGridFrequencies(
+  points: readonly PitchGridPoint[],
+  dimension: PitchGridDimension,
+): PitchGridAssignedVoice[] {
+  // 空集合でも次元の正当性は先に確かめる。不正ならここで拒む。
+  verticalPrimeFor(dimension);
+  const ordered = sortPoints(points);
+  const keys = new Set<string>();
+  for (const point of ordered) {
+    const key = pitchGridKey(point);
+    if (keys.has(key)) {
+      throw new Error(`重複した座標である: ${key}`);
+    }
+    keys.add(key);
   }
-  while (frequency >= PITCH_GRID_SOUND_HIGH_HZ) {
-    frequency /= 2;
+  if (ordered.length === 0) {
+    return [];
   }
-  return frequency;
+  // 格子は15点までであり、異なる有効な座標は15通りしかないため、
+  // ここでの集合はビット列で表せる。範囲外の座標は論理比の算出で拒む。
+  const count = ordered.length;
+  const logRatios: number[] = [];
+  const perCoord: PitchGridAssignCandidate[][] = [];
+  const all: PitchGridAssignCandidate[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const point = ordered[index];
+    const ratio = logicalRatioFor(point, dimension);
+    const logRatio = Math.log2(ratio.numerator) - Math.log2(ratio.denominator);
+    logRatios.push(logRatio);
+    const list: PitchGridAssignCandidate[] = [];
+    for (const candidate of soundingCandidatesFor(point, dimension)) {
+      const deviation = logRatio + candidate.k - CENTER_OFFSET_OCTAVES;
+      const entry: PitchGridAssignCandidate = {
+        coordIndex: index,
+        k: candidate.k,
+        frequency: candidate.frequency,
+        logRatio,
+        centerDeviationSquared: deviation * deviation,
+        rank: -1,
+      };
+      list.push(entry);
+      all.push(entry);
+    }
+    perCoord.push(list);
+  }
+  // 候補順は周波数昇順、同値なら固定座標順、さらに `k` 昇順とする。
+  all.sort(
+    (a, b) =>
+      a.frequency - b.frequency || a.coordIndex - b.coordIndex || a.k - b.k,
+  );
+  for (let rank = 0; rank < all.length; rank += 1) {
+    all[rank].rank = rank;
+  }
+  const total = all.length;
+  const byRank: PitchGridAssignCandidate[] = [...all].sort((a, b) => a.rank - b.rank);
+
+  // 経路の `k` 列を固定座標順に復元する。通常の比較では呼ばず、
+  // 第一目的・第二目的が同値の経路の比較にだけ使う。
+  const columnOf = (entry: PitchGridAssignEntry): number[] => {
+    const column = new Array<number>(count).fill(Number.NaN);
+    let current: PitchGridAssignEntry | null = entry;
+    while (current !== null) {
+      const candidate = byRank[current.rank];
+      column[candidate.coordIndex] = candidate.k;
+      current = current.prev;
+    }
+    return column;
+  };
+  // 比較順は第一目的、第二目的、固定座標順の `k` 列の辞書順（小さい方）とする。
+  // 未選択の位置は両経路とも `NaN` であり、大小比較では等しく扱われる。
+  const isBetter = (next: PitchGridAssignEntry, current: PitchGridAssignEntry): boolean => {
+    if (next.first !== current.first) {
+      return next.first < current.first;
+    }
+    if (next.second !== current.second) {
+      return next.second < current.second;
+    }
+    const nextColumn = columnOf(next);
+    const currentColumn = columnOf(current);
+    for (let index = 0; index < count; index += 1) {
+      if (nextColumn[index] < currentColumn[index]) {
+        return true;
+      }
+      if (currentColumn[index] < nextColumn[index]) {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const states = new Map<number, PitchGridAssignEntry>();
+  const buckets: PitchGridAssignEntry[][] = Array.from({ length: total }, () => []);
+  // 単一候補を初期状態とし、第一目的ゼロ、第二目的にその候補の
+  // 中央からの偏差の平方を加える。
+  for (const candidate of all) {
+    const mask = 1 << candidate.coordIndex;
+    const entry: PitchGridAssignEntry = {
+      first: 0,
+      second: candidate.centerDeviationSquared,
+      prev: null,
+      rank: candidate.rank,
+      mask,
+    };
+    states.set(mask * total + candidate.rank, entry);
+    buckets[candidate.rank].push(entry);
+  }
+  // 順位の低い方から遷移を確定する。遷移先は必ず高い順位のため、
+  // その順位の処理時点では到達経路が出そろっている。
+  for (let rank = 0; rank < total; rank += 1) {
+    for (const entry of buckets[rank]) {
+      if (states.get(entry.mask * total + entry.rank) !== entry) {
+        continue;
+      }
+      const last = byRank[entry.rank];
+      for (let index = 0; index < count; index += 1) {
+        if ((entry.mask & (1 << index)) !== 0) {
+          continue;
+        }
+        for (const next of perCoord[index]) {
+          if (next.rank <= rank) {
+            continue;
+          }
+          // 隣接間隔は論理比同士の比と両候補の `k` の差から求める対数間隔とし、
+          // 絶対周波数同士の除算では求めない。
+          let gap = next.logRatio - last.logRatio + (next.k - last.k);
+          if (next.frequency === last.frequency) {
+            // 将来同値の候補が出た場合は間隔ゼロとして評価し、一声にまとめない。
+            gap = 0;
+          }
+          const diff = gap - TARGET_GAP_OCTAVES;
+          // 過小間隔の追加罰として、目標未満では差の平方を二重に数える。
+          const step = diff * diff + (gap < TARGET_GAP_OCTAVES ? diff * diff : 0);
+          const mask = entry.mask | (1 << index);
+          const key = mask * total + next.rank;
+          const relaxed: PitchGridAssignEntry = {
+            first: entry.first + step,
+            second: entry.second + next.centerDeviationSquared,
+            prev: entry,
+            rank: next.rank,
+            mask,
+          };
+          const current = states.get(key);
+          if (current === undefined || isBetter(relaxed, current)) {
+            states.set(key, relaxed);
+            buckets[next.rank].push(relaxed);
+          }
+        }
+      }
+    }
+  }
+  const fullMask = (1 << count) - 1;
+  let best: PitchGridAssignEntry | null = null;
+  for (const entry of states.values()) {
+    if (entry.mask !== fullMask) {
+      continue;
+    }
+    if (best === null || isBetter(entry, best)) {
+      best = entry;
+    }
+  }
+  if (best === null) {
+    throw new Error('発音配置が求まらない');
+  }
+  // 全座標を選んだ状態の経路は座標数と同じ段数であり、各座標の候補を一つずつ持つ。
+  const picked = new Array<PitchGridAssignCandidate | undefined>(count);
+  let current: PitchGridAssignEntry | null = best;
+  while (current !== null) {
+    const candidate = byRank[current.rank];
+    picked[candidate.coordIndex] = candidate;
+    current = current.prev;
+  }
+  return ordered.map((point, index) => {
+    const candidate = picked[index];
+    if (candidate === undefined) {
+      throw new Error('発音配置の復元に失敗した');
+    }
+    return { key: pitchGridKey(point), frequency: candidate.frequency };
+  });
 }
 
 /**

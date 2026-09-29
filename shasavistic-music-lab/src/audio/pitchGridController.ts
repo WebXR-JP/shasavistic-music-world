@@ -22,9 +22,8 @@ import {
   type PitchGridVoiceSpec,
 } from './pitchGridSound';
 import {
+  assignPitchGridFrequencies,
   createPitchGridState,
-  pitchGridKey,
-  soundingFrequencyFor,
   type PitchGridDimension,
   type PitchGridPoint,
 } from './pitchGrid';
@@ -122,14 +121,15 @@ export function createPitchGridController(
   // 音声側の表示内容変化の購読解除口。演奏口の生成時に購読し、破棄時に外す。
   let unsubscribeSounding: (() => void) | null = null;
 
+  // 発音配置の算出は担わず、所有する集合と次元を配置関数へ渡すだけとする。
+  // その結果から全声仕様を作る。呼び出し口の構造は変えない。
   const specsOf = (
     dimension: PitchGridDimension,
     points: readonly PitchGridPoint[],
   ): PitchGridVoiceSpec[] =>
-    points.map((point) => ({
-      key: pitchGridKey(point),
-      frequency: soundingFrequencyFor(point, dimension),
-    }));
+    assignPitchGridFrequencies(points, dimension).map(
+      (assigned): PitchGridVoiceSpec => ({ key: assigned.key, frequency: assigned.frequency }),
+    );
 
   // 演奏口の生成は初回の発音まで遅らせる。生成時に音声側の表示内容変化を
   // 購読し、制御器の既存通知へ転送する。表示の快照取得と通知の接続だけが

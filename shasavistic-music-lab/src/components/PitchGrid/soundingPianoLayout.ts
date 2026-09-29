@@ -1,15 +1,15 @@
 /**
  * 鳴り中音高のピアノ対照表示のための純粋な写像と点配置。
  *
- * 発音周波数（`[220, 440)` Hz）から鍵盤上の横位置（0..1）への写像と、
+ * 発音周波数（`[220, 1760]` Hz）から鍵盤上の横位置（0..1）への写像と、
  * 同じ鍵付近で重なる声の丸の配置だけを担う。描画（Canvas や React）には
  * 依存せず、検査では数値だけで判定する。配置の具体値（点の大きさ・間隔・
  * 色など）は描画側の初期候補とし、実画面の確認で決める。
  *
  * 横位置は基準音 A3 からの半音関係（12平均律上での半音位置）で求め、
  * 隣接する鍵の中心間へ補間する。Hz に線形な配置や最寄り鍵中心への丸めは
- * しない。A3 を左端（0）、A4 を比較用の終端目盛り（1）に対応させる。
- * A4 は現行発音域には含まない。
+ * しない。A3 中心を左端（0）、A6 中心を終端（1）に対応させ、全域を鍵盤幅に
+ * 写す。A6 は発音域の上端を含む。
  *
  * @packageDocumentation
  */
@@ -17,16 +17,22 @@
 /** 鍵盤の左端の基準音（A3、Hz）。 */
 export const SOUNDING_PIANO_LOW_HZ = 220;
 
-/** 鍵盤の終端目盛りの音（A4、Hz）。比較用であり現行発音域には含まない。 */
-export const SOUNDING_PIANO_HIGH_HZ = 440;
+/** 鍵盤の下端の音（A6、Hz）。発音域の上端を含む。 */
+export const SOUNDING_PIANO_HIGH_HZ = 1760;
 
-/** 半音位置の総数（A3=0 … A4=12）。 */
-export const SOUNDING_PIANO_SEMITONE_COUNT = 12;
+/** 半音位置の総数（A3=0 … A6=36、3オクターブ）。 */
+export const SOUNDING_PIANO_SEMITONE_COUNT = 36;
 
-/** A3 から数えた白鍵の半音位置。A3・B3・C4・D4・E4・F4・G4・A4 の順。 */
-const WHITE_KEY_SEMITONES: readonly number[] = [0, 2, 3, 5, 7, 8, 10, 12];
+/** 1オクターブあたりの半音数。基準音からの半音位置の算出に使う。 */
+const SEMITONES_PER_OCTAVE = 12;
 
-/** A3 からの鍵名。A3 … A4 の13鍵。 */
+/** A3 から数えた白鍵の半音位置。3オクターブ分22鍵の順。 */
+const WHITE_KEY_SEMITONES: readonly number[] = [
+  0, 2, 3, 5, 7, 8, 10, 12, 14, 15, 17, 19, 20, 22, 24, 26, 27, 29, 31, 32, 34,
+  36,
+];
+
+/** A3 からの鍵名。A3 … A6 の37鍵。 */
 const KEY_NAMES: readonly string[] = [
   'A3',
   'A#3',
@@ -41,18 +47,42 @@ const KEY_NAMES: readonly string[] = [
   'G4',
   'G#4',
   'A4',
+  'A#4',
+  'B4',
+  'C5',
+  'C#5',
+  'D5',
+  'D#5',
+  'E5',
+  'F5',
+  'F#5',
+  'G5',
+  'G#5',
+  'A5',
+  'A#5',
+  'B5',
+  'C6',
+  'C#6',
+  'D6',
+  'D#6',
+  'E6',
+  'F6',
+  'F#6',
+  'G6',
+  'G#6',
+  'A6',
 ];
 
 /**
  * 半音位置の鍵が黒鍵かを判定する。
  *
- * @param semitone - A3 からの半音位置。0…12 の整数。
+ * @param semitone - A3 からの半音位置。0…36 の整数。
  * @returns 黒鍵の場合だけ `true`。
- * @throws `RangeError` — 半音位置が 0…12 の整数でない場合。
+ * @throws `RangeError` — 半音位置が 0…36 の整数でない場合。
  */
 export function isBlackPianoKey(semitone: number): boolean {
   if (!Number.isInteger(semitone) || semitone < 0 || semitone > SOUNDING_PIANO_SEMITONE_COUNT) {
-    throw new RangeError(`半音位置は0…12の整数であること: ${String(semitone)}`);
+    throw new RangeError(`半音位置は0…36の整数であること: ${String(semitone)}`);
   }
   return !WHITE_KEY_SEMITONES.includes(semitone);
 }
@@ -60,13 +90,13 @@ export function isBlackPianoKey(semitone: number): boolean {
 /**
  * 半音位置の鍵名を返す。
  *
- * @param semitone - A3 からの半音位置。0…12 の整数。
- * @returns `A3` … `A4` の鍵名。
- * @throws `RangeError` — 半音位置が 0…12 の整数でない場合。
+ * @param semitone - A3 からの半音位置。0…36 の整数。
+ * @returns `A3` … `A6` の鍵名。
+ * @throws `RangeError` — 半音位置が 0…36 の整数でない場合。
  */
 export function pianoKeyName(semitone: number): string {
   if (!Number.isInteger(semitone) || semitone < 0 || semitone > SOUNDING_PIANO_SEMITONE_COUNT) {
-    throw new RangeError(`半音位置は0…12の整数であること: ${String(semitone)}`);
+    throw new RangeError(`半音位置は0…36の整数であること: ${String(semitone)}`);
   }
   // 範囲検査済みのため表内を指す。
   return KEY_NAMES[semitone];
@@ -85,9 +115,9 @@ export function doPianoSemitone(): number {
 
 /** 鍵盤上の鍵の配置。描画の矩形算出に使う。 */
 export interface PianoKeyLayout {
-  /** A3 からの半音位置。0…12 の整数。 */
+  /** A3 からの半音位置。0…36 の整数。 */
   readonly semitone: number;
-  /** 鍵名。`A3` … `A4`。 */
+  /** 鍵名。`A3` … `A6`。 */
   readonly name: string;
   /** 黒鍵か。 */
   readonly black: boolean;
@@ -105,12 +135,12 @@ export interface PianoKeyLayout {
 export const BLACK_PIANO_KEY_WIDTH_RATIO = 0.62;
 
 /**
- * A3 … A4 の13鍵の配置を返す。
+ * A3 … A6 の37鍵の配置を返す。
  *
- * 白鍵8鍵を `[0, 1]` に等間隔で並べ、黒鍵は両隣の白鍵の境界を中心に置く
+ * 白鍵22鍵を `[0, 1]` に等間隔で並べ、黒鍵は両隣の白鍵の境界を中心に置く
  * （通常の並び）。横位置の写像（`soundingPianoX`）の鍵中心と一致する。
  *
- * @returns 半音位置の昇順に並んだ13鍵の配置。
+ * @returns 半音位置の昇順に並んだ37鍵の配置。
  */
 export function pianoKeyboardLayout(): readonly PianoKeyLayout[] {
   const whiteWidth = 1 / WHITE_KEY_SEMITONES.length;
@@ -142,7 +172,7 @@ export function pianoKeyboardLayout(): readonly PianoKeyLayout[] {
 }
 
 // 半音位置の鍵中心を白鍵幅単位で返す。白鍵は幅1で等間隔に並べ、黒鍵は
-// 両隣の白鍵の境界に置く（通常の並び）。A3 中心が 0.5、A4 中心が 7.5 である。
+// 両隣の白鍵の境界に置く（通常の並び）。A3 中心が 0.5、A6 中心が 21.5 である。
 function rawKeyCenter(semitone: number): number {
   const whiteIndex = WHITE_KEY_SEMITONES.indexOf(semitone);
   if (whiteIndex >= 0) {
@@ -162,22 +192,24 @@ function rawKeyCenter(semitone: number): number {
  * 発音周波数を鍵盤上の横位置（0..1）へ写す。
  *
  * 基準音 A3 からの半音位置を求め、隣接する鍵の中心間へ補間する。
- * A3 中心を左端（0）、A4 中心を終端目盛り（1）に正規化する。
+ * A3 中心を左端（0）、A6 中心を右端（1）に正規化し、全域を鍵盤幅に写す。
  * 域外の正の周波数は両端へ寄せ、描画を破綻させない。
  *
  * @param frequency - 発音周波数（Hz）。正の有限値。
- * @returns 鍵盤上の横位置。A3 で 0、A4 で 1。
+ * @returns 鍵盤上の横位置。A3 で 0、A6 で 1。
  * @throws `RangeError` — 周波数が正の有限値でない場合。
  */
 export function soundingPianoX(frequency: number): number {
   if (!Number.isFinite(frequency) || frequency <= 0) {
     throw new RangeError(`発音周波数は正の有限値であること: ${String(frequency)}`);
   }
-  // ADR: 音声側の声は `[220, 440)` Hz に収まるため、域外は通常到達しない。
-  // 描画面の破綻を避ける表示上の譲歩として両端へ寄せ、拒否はしない。
+  // ADR: 半音位置は1オクターブ12半音で求める。鍵盤の総半音数（36）とは
+  // 無関係であり、高域を端へ押し付けず全域を鍵盤幅に写す。域外は通常
+  // 到達しないため、描画面の破綻を避ける表示上の譲歩として両端へ寄せ、
+  // 拒否はしない。
   const semitones = Math.min(
     Math.max(
-      SOUNDING_PIANO_SEMITONE_COUNT * Math.log2(frequency / SOUNDING_PIANO_LOW_HZ),
+      SEMITONES_PER_OCTAVE * Math.log2(frequency / SOUNDING_PIANO_LOW_HZ),
       0,
     ),
     SOUNDING_PIANO_SEMITONE_COUNT,
@@ -186,7 +218,7 @@ export function soundingPianoX(frequency: number): number {
   const upper = lower + 1;
   const ratio = semitones - lower;
   const raw = rawKeyCenter(lower) * (1 - ratio) + rawKeyCenter(upper) * ratio;
-  // A3 中心（0.5）を 0、A4 中心（7.5）を 1 に正規化する。
+  // A3 中心（0.5）を 0、A6 中心（21.5）を 1 に正規化する。
   return (raw - 0.5) / (rawKeyCenter(SOUNDING_PIANO_SEMITONE_COUNT) - 0.5);
 }
 
@@ -197,7 +229,7 @@ export function soundingPianoX(frequency: number): number {
  * 横位置の写像（`soundingPianoX`）には使わない。
  *
  * @param frequency - 発音周波数（Hz）。正の有限値。
- * @returns 最も近い鍵の半音位置。0…12 の整数。
+ * @returns 最も近い鍵の半音位置。0…36 の整数。
  * @throws `RangeError` — 周波数が正の有限値でない場合。
  */
 export function nearestPianoSemitone(frequency: number): number {
@@ -205,7 +237,7 @@ export function nearestPianoSemitone(frequency: number): number {
     throw new RangeError(`発音周波数は正の有限値であること: ${String(frequency)}`);
   }
   const semitones =
-    SOUNDING_PIANO_SEMITONE_COUNT * Math.log2(frequency / SOUNDING_PIANO_LOW_HZ);
+    SEMITONES_PER_OCTAVE * Math.log2(frequency / SOUNDING_PIANO_LOW_HZ);
   return Math.min(Math.max(Math.round(semitones), 0), SOUNDING_PIANO_SEMITONE_COUNT);
 }
 

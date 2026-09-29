@@ -390,7 +390,7 @@ describe('格子の個別声と共有文脈', () => {
     await sound.dispose();
   });
 
-  it('同じ鍵で周波数が変わった場合は旧声を減衰させて新声を開始する', async () => {
+  it('同鍵・異周波数の保持中声は節点を保ち即時に切り替える', async () => {
     const harness = createHarness();
     const sound = createPitchGridSound(harness.createContext);
     await sound.setVoices([{ key: '0,0', frequency: 220 }]);
@@ -398,14 +398,129 @@ describe('格子の個別声と共有文脈', () => {
     if (context === undefined) {
       throw new Error('検査用の文脈が作られていない');
     }
+    const oscillator = context.oscillators[0];
+    const gain = context.gains[0];
+    if (oscillator === undefined || gain === undefined) {
+      throw new Error('検査用の声が作られていない');
+    }
+    const eventsBefore = gain.events.length;
+    const startCallsBefore = oscillator.calls.filter((call) => call === 'start').length;
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    // 再調律では発振器と利得ノードを保ち、周波数だけを新値へ切り替えること。
+    // 代替物の周波数口に段階的な操作はないため、値の直接設定が即時切替である。
+    await sound.setVoices([{ key: '0,0', frequency: 330 }]);
+    expect(context.oscillators).toHaveLength(1);
+    expect(context.gains).toHaveLength(1);
+    expect(context.oscillators[0]).toBe(oscillator);
+    expect(context.gains[0]).toBe(gain);
+    expect(oscillator.frequency.value).toBe(330);
+    // ADSRを再始動しない。停止も利得の再予約も行わないこと。
+    expect(oscillator.stopTimes).toEqual([]);
+    expect(oscillator.calls).not.toContain('disconnect');
+    expect(gain.events).toHaveLength(eventsBefore);
+    expect(oscillator.calls.filter((call) => call === 'start')).toHaveLength(startCallsBefore);
+    expect(sound.voiceCount).toBe(1);
+    // 表示通知には変更後の実周波数を反映し、内容変化として知らせること。
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    expect(calls).toBe(1);
+    await sound.dispose();
+  });
+
+  it('リリース予約済みの声は再利用せず新声を作る', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    // 旧声を減衰予約のまま残す。
+    await sound.setVoices([]);
+    expect(sound.soundingVoices).toEqual([]);
+    // 同鍵・異周波数でも予約済みの声は切り替えず、新声を開始すること。
     await sound.setVoices([{ key: '0,0', frequency: 330 }]);
     expect(context.oscillators).toHaveLength(2);
     expect(context.oscillators[0]?.stopTimes).toHaveLength(1);
     expect(context.oscillators[1]?.frequency.value).toBe(330);
-    // 古い完了通知が新しい声を止めないこと。
+    expect(context.oscillators[1]?.stopTimes).toEqual([]);
+    expect(sound.voiceCount).toBe(1);
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    // 古い完了通知が新しい声を止めたり表示を消したりしないこと。
+    context.oscillators[0]?.fireEnded();
+    expect(sound.voiceCount).toBe(1);
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    expect(context.oscillators[1]?.calls).not.toContain('disconnect');
+    await sound.dispose();
+  });
+
+  it('リリース予約済みの同鍵・同周波数も再利用せず新声を作る', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    await sound.setVoices([]);
+    // 周波数が変わらなくても予約済みの声は使い回さないこと。
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(context.oscillators).toHaveLength(2);
+    expect(context.oscillators[1]?.frequency.value).toBe(220);
+    expect(sound.voiceCount).toBe(1);
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 220 }]);
     context.oscillators[0]?.fireEnded();
     expect(sound.voiceCount).toBe(1);
     expect(context.oscillators[1]?.calls).not.toContain('disconnect');
+    await sound.dispose();
+  });
+
+  it('起動待ちの声の再調律は声を作り直さない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    const release = harness.holdResume();
+    const pending = sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    // 再開の完了前に周波数が変わっても、起動待ちの声を保ち値を変えること。
+    await sound.setVoices([{ key: '0,0', frequency: 330 }]);
+    expect(context.oscillators).toHaveLength(1);
+    expect(context.oscillators[0]?.frequency.value).toBe(330);
+    // 再開未成立の声は表示しないこと。
+    expect(sound.soundingVoices).toEqual([]);
+    release();
+    await pending;
+    await flush();
+    expect(sound.voiceCount).toBe(1);
+    // 完了後は変更後の実周波数で表示すること。
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    await sound.dispose();
+  });
+
+  it('再調律の再反映は内容不変では通知しない', async () => {
+    const harness = createHarness();
+    const sound = createPitchGridSound(harness.createContext);
+    let calls = 0;
+    sound.subscribeSounding(() => {
+      calls += 1;
+    });
+    await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    expect(calls).toBe(1);
+    await sound.setVoices([{ key: '0,0', frequency: 330 }]);
+    expect(sound.soundingVoices).toEqual([{ key: '0,0', frequency: 330 }]);
+    expect(calls).toBe(2);
+    const context = harness.contexts[0];
+    if (context === undefined) {
+      throw new Error('検査用の文脈が作られていない');
+    }
+    // 同一内容の再反映は声も通知も増やさないこと。
+    await sound.setVoices([{ key: '0,0', frequency: 330 }]);
+    expect(context.oscillators).toHaveLength(1);
+    expect(calls).toBe(2);
     await sound.dispose();
   });
 
@@ -714,6 +829,8 @@ describe('格子の個別声の表示用保持中一覧', () => {
       calls += 1;
     });
     await sound.setVoices([{ key: '0,0', frequency: 220 }]);
+    // 旧声を減衰予約のまま残し、予約済みの声は再利用せず新声を開始する。
+    await sound.setVoices([]);
     await sound.setVoices([{ key: '0,0', frequency: 330 }]);
     const context = harness.contexts[0];
     if (context === undefined) {

@@ -155,8 +155,10 @@ export interface PitchGridSound {
    * 座標集合を声へ反映する（差分の一括反映）。
    *
    * 集合にない声はその声だけ減衰を予約し、集合にない鍵は新声を開始する。
-   * 同じ鍵・同じ周波数に残る声は開始し直さない。
-   * 同じ鍵で周波数が変わっていた場合は旧声を減衰させて新声を開始する。
+   * 同じ鍵・同じ周波数に残る保持中の声は開始し直さない。
+   * 同じ鍵で周波数が変わった保持中の声は、発振器と利得ノードを保ち、
+   * 周波数を段階的に変えずその時点で新値へ切り替え、ADSRを再始動しない。
+   * リリース予約済みの声は再利用せず新声を開始する。
    *
    * @param specs - 鳴らす声の鍵と周波数。鍵の重複・空鍵・上限超過を含まないこと。
    * @returns 共有文脈の再開完了で解決する約束。起動前に取り消された場合は
@@ -209,8 +211,13 @@ export interface PitchGridSound {
 /** 所有する一つの声。終了通知の照合はこの実体で行う。 */
 interface ActiveVoice {
   readonly key: string;
-  /** 発音周波数（Hz）。同じ鍵の再反映で変わらないことを照合する。 */
-  readonly frequency: number;
+  /**
+   * 発音周波数（Hz）。
+   *
+   * 通常反映の再調律で同鍵・異周波数の保持中声を即時切替するため可変とする。
+   * 発振器の現在値と一致させて保ち、表示用の快照はこの値を読む。
+   */
+  frequency: number;
   readonly oscillator: PitchGridSoundOscillator;
   readonly gain: PitchGridSoundGain;
   /** ノートオン時刻（音声文脈の時刻基準）。途中終了の開始値の算出に使う。 */
@@ -399,6 +406,19 @@ export function createPitchGridSound(
     emitSoundingIfChanged();
   };
 
+  // 一つの保持中声を新しい周波数へ即時に切り替える。
+  // ADR: 通常反映の再調律では発振器と利得ノードを保ち、周波数を段階的に
+  // 変えずその時点で新値へ切り替える。ADSRは再始動しない（包絡の再予約・
+  // 停止予約を行わない）。リリース予約済みの声には使わず、新声を作る。
+  // 切替時のクリックや聴感は未検証であり、滑らかさは保証しない。
+  const retuneVoice = (voice: ActiveVoice, frequency: number): void => {
+    voice.oscillator.frequency.value = frequency;
+    voice.frequency = frequency;
+    // 保持中かつ再開成立の声は表示内容が変わるため、内容変化時のみ通知する。
+    // 起動待ちの声は表示外のため照合で通知しない。
+    emitSoundingIfChanged();
+  };
+
   // 一つの声に減衰を予約する。予約済みの再呼び出しは何もしない。
   const releaseVoice = (voice: ActiveVoice): void => {
     if (voice.released) {
@@ -568,17 +588,20 @@ export function createPitchGridSound(
         }
       }
 
-      // ADR: 同じ鍵・同じ周波数に残る声は開始し直さない。集合の意味上は
+      // ADR: 同じ鍵・同じ周波数に残る保持中の声は開始し直さない。集合の意味上は
       // 移動済みだが、同じ音を途切れさせず、発振器の作り直しも避ける。
-      // 同じ鍵で周波数が変わっていた場合は旧声を減衰させて新声を開始する。
+      // 同じ鍵で周波数が変わった保持中の声は即時に切り替え、ADSRは再始動しない。
+      // リリース予約済みの声は再利用せず新声を作る（所有照合で古い完了通知が
+      // 新声を止めたり復活させたりしない）。
       const started: ActiveVoice[] = [];
       for (const spec of specs) {
         const owned = voices.get(spec.key);
-        if (owned !== undefined) {
+        if (owned !== undefined && !owned.released) {
           if (owned.frequency === spec.frequency) {
             continue;
           }
-          releaseVoice(owned);
+          retuneVoice(owned, spec.frequency);
+          continue;
         }
         started.push(startVoice(activeContext, spec.key, spec.frequency));
       }

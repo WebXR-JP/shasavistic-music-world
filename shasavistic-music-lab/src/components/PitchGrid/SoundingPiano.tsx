@@ -110,8 +110,8 @@ function soundingVoicesSignature(voices: readonly PitchGridSoundingVoice[]): str
     .join('|');
 }
 
-// 鍵盤の静的部分を描く。A3 … A4 の通常の並びとし、C4 をド・C4 として示し、
-// A4 端を比較用の終端目盛りとして強調する。点の動的部分は別描画とする。
+// 鍵盤の静的部分を描く。A3 … A6 の通常の並びとし、C4 をド・C4 として示す。
+// 点の動的部分は別描画とする。
 function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
   const width = SOUNDING_PIANO_CANVAS_WIDTH;
   const height = SOUNDING_PIANO_CANVAS_HEIGHT;
@@ -138,7 +138,7 @@ function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
   drawing.font = '22px sans-serif';
   drawing.fillText('減衰中の尾音は含まない', width - 24, SOUNDING_PIANO_LEGEND_Y);
 
-  // 白鍵8鍵を全幅に並べる。C4 だけはド・C4 と記し、他は鍵名を小さく添える。
+  // 白鍵22鍵を全幅に並べる。C4 だけはド・C4 と記し、他は鍵名を小さく添える。
   const doSemitone = doPianoSemitone();
   for (const key of pianoKeyboardLayout()) {
     if (key.black) {
@@ -163,7 +163,7 @@ function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
     }
   }
 
-  // 黒鍵5鍵を白鍵の上部に重ねる。
+  // 黒鍵15鍵を白鍵の上部に重ねる。
   for (const key of pianoKeyboardLayout()) {
     if (!key.black) {
       continue;
@@ -185,7 +185,7 @@ function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
     );
   }
 
-  // A4 端の終端目盛り。比較用の終端であり現行発音域には含まない。
+  // A6 端の終端目盛り。発音域の上端を含む。
   drawing.fillStyle = '#ffffff';
   drawing.fillRect(width - 5, keyboardTop, 5, height - keyboardTop);
 }

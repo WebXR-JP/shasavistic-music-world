@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createServer, type ViteDevServer } from 'vite';
 import { describe, expect, it } from 'vitest';
-import { soundingFrequencyFor } from './pitchGrid';
+import { assignPitchGridFrequencies, pitchGridKey } from './pitchGrid';
 
 /** ページ初期化手続きが用意する採取口。型は検査側の宣言であり実行時検証ではない。 */
 declare global {
@@ -260,6 +260,19 @@ const MOVE_DIRS: readonly { readonly dx: number; readonly dy: number }[] = [
   { dx: 1, dy: -1 },
 ];
 
+/**
+ * 単点集合の配置で選ばれる発音周波数。単一声の採取の期待値に使う。
+ *
+ * 複数点の同時発音の期待値には使わない（集合単位の配置に従うため）。
+ */
+function singleAssignedFrequency(
+  point: { readonly x: number; readonly y: number },
+  dimension: 3 | 4 | 5,
+): number {
+  const assigned = assignPitchGridFrequencies([point], dimension);
+  return assigned[0].frequency;
+}
+
 /** 視点の追跡位置。 */
 interface Aim {
   readonly x: number;
@@ -283,9 +296,10 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
       '格子の照準・オンオフ・複数音・八方向移動・端拒否・次元切替を判定する',
       async () => {
         // 期待する発音周波数は Node 側の純粋計算から求める。
-        const middleFreqs = MIDDLE_X_ORDER.map((x) => soundingFrequencyFor({ x, y: 0 }, 3));
+        // 単一声の期待値は単点集合の配置から求める。
+        const middleFreqs = MIDDLE_X_ORDER.map((x) => singleAssignedFrequency({ x, y: 0 }, 3));
         const topFreqsOf = (dimension: 3 | 4 | 5): number[] =>
-          MIDDLE_X_ORDER.map((x) => soundingFrequencyFor({ x, y: 1 }, dimension));
+          MIDDLE_X_ORDER.map((x) => singleAssignedFrequency({ x, y: 1 }, dimension));
 
         let server: ViteDevServer | null = null;
         const { browser, version } = await launchInteractBrowser();
@@ -597,6 +611,14 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           const singleOffLevels = await readLevels(middleFreqs);
 
           // 複数音の発音と停止：隣の2点を鳴らし、成分と消音を確かめる。
+          // 二声の同時発音は集合単位の配置に従い、単点の値とは限らない。
+          const duoFreqs = assignPitchGridFrequencies(
+            [
+              { x: MIDDLE_X_ORDER[2], y: 0 },
+              { x: MIDDLE_X_ORDER[3], y: 0 },
+            ],
+            3,
+          ).map((voice) => voice.frequency);
           await aimAt(middleAim(2));
           await clickAtCenter();
           await waitForTone();
@@ -604,7 +626,7 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await clickAtCenter();
           const duoRms = await waitForTone();
           await sleep(POST_ACTION_SETTLE_MS);
-          const duoLevels = await readLevels(middleFreqs);
+          const duoLevels = await readLevels(duoFreqs);
           const duoPeak = await page.evaluate(() => window.__peak(0));
           await aimAt(middleAim(2));
           await clickAtCenter();
@@ -728,12 +750,13 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await aimAt(baseAim);
           await clickAtCenter();
           await waitForTone();
+          // 移動の各局面は単一点の発声のため、単点集合の配置から求める。
           const moveFreqOf = (dx: number, dy: number): number =>
-            soundingFrequencyFor({ x: moveBaseX + dx, y: dy }, 3);
+            singleAssignedFrequency({ x: moveBaseX + dx, y: dy }, 3);
           const moveCandidates = [
-            soundingFrequencyFor({ x: moveBaseX, y: 0 }, 3),
+            singleAssignedFrequency({ x: moveBaseX, y: 0 }, 3),
             ...MOVE_DIRS.map(({ dx, dy }) => moveFreqOf(dx, dy)),
-            soundingFrequencyFor({ x: -2, y: 0 }, 3),
+            singleAssignedFrequency({ x: -2, y: 0 }, 3),
           ];
 
           // 八方向移動：単一点を全方向へ動かし、成分で確かめる。動かしては逆向きに戻す。
@@ -784,7 +807,21 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           await waitForTone();
           await sleep(POST_ACTION_SETTLE_MS);
           const edgeLevels = await readLevels(moveCandidates);
-          const edgeHz = soundingFrequencyFor({ x: -2, y: 0 }, 3);
+          // 左端の点は起点と鳴り続ける二点集合で配置される。
+          const edgeAssigned = assignPitchGridFrequencies(
+            [
+              { x: moveBaseX, y: 0 },
+              { x: -2, y: 0 },
+            ],
+            3,
+          );
+          const edgeVoice = edgeAssigned.find(
+            (voice) => voice.key === pitchGridKey({ x: -2, y: 0 }),
+          );
+          if (edgeVoice === undefined) {
+            throw new Error('左端の配置が求まらない');
+          }
+          const edgeHz = edgeVoice.frequency;
           const edgeIndex = moveCandidates.indexOf(edgeHz);
           expect(edgeIndex).toBeGreaterThanOrEqual(0);
           expect(edgeLevels[edgeIndex] ?? Number.NEGATIVE_INFINITY, '左端の成分').toBeGreaterThan(
@@ -838,7 +875,7 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
             PRESENT_DB_MIN,
           );
           const topFreqOf = (dimension: 3 | 4 | 5): number =>
-            soundingFrequencyFor({ x: topBaseX, y: 1 }, dimension);
+            singleAssignedFrequency({ x: topBaseX, y: 1 }, dimension);
           // 次元釦列へ降りる：パッド下段左から真下へ走査し、左端から右へ数える。
           const padBottomRow = padAims[2];
           if (padBottomRow === undefined || padBottomRow[0] === undefined) {
@@ -986,20 +1023,24 @@ describe.skipIf(process.env['XRIFT_INTERACT_CAPTURE'] !== '1')(
           expect(duoRms).toBeGreaterThan(TONE_RMS_MIN);
           expect(duoRms).toBeLessThan(TONE_RMS_MAX);
           expect(duoPeak).toBeLessThan(TONE_PEAK_MAX);
-          expect(duoLevels[2] ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(PRESENT_DB_MIN);
-          expect(duoLevels[3] ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(PRESENT_DB_MIN);
+          for (const [index, frequency] of duoFreqs.entries()) {
+            expect(
+              duoLevels[index] ?? Number.NEGATIVE_INFINITY,
+              `複数音の成分${frequency}Hz`,
+            ).toBeGreaterThan(PRESENT_DB_MIN);
+          }
           expect(duoStoppedRms).toBeLessThan(STOPPED_RMS_MAX);
           // 八方向移動と次元切替の効果は操作直後に確かめた（moveResults/dimensionResults）。
           expect(moveResults).toHaveLength(MOVE_DIRS.length);
           for (const result of moveResults) {
             expect(result.frequencyHz).toBe(
-              soundingFrequencyFor({ x: moveBaseX + result.dx, y: result.dy }, 3),
+              singleAssignedFrequency({ x: moveBaseX + result.dx, y: result.dy }, 3),
             );
           }
           expect(dimensionResults.map((result) => result.dimension)).toEqual([4, 5, 3]);
           for (const result of dimensionResults) {
             expect(result.frequencyHz).toBe(
-              soundingFrequencyFor({ x: topBaseX, y: 1 }, result.dimension as 3 | 4 | 5),
+              singleAssignedFrequency({ x: topBaseX, y: 1 }, result.dimension as 3 | 4 | 5),
             );
           }
           // 全操作が信頼済み入力であり、文脈は操作由来の再開で動くこと。

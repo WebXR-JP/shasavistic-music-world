@@ -27,22 +27,29 @@ function semitoneAbove(frequency: number, semitones: number): number {
 }
 
 describe('発音周波数から鍵盤横位置への写像', () => {
-  it('音域両端を左端と終端目盛りに対応させる', () => {
+  it('音域両端を左端と右端に対応させる', () => {
     expect(soundingPianoX(SOUNDING_PIANO_LOW_HZ)).toBe(0);
     expect(soundingPianoX(SOUNDING_PIANO_HIGH_HZ)).toBe(1);
   });
 
   it('半音の中間を隣接する鍵の中心間へ補間する', () => {
     // A3 中心を 0、A#3 中心を白鍵幅単位の 1 とした中間であること。
-    // 白鍵幅単位の A3 中心 0.5・A#3 中心 1・正規化幅 7 から求まる。
+    // 白鍵幅単位の A3 中心 0.5・A#3 中心 1・正規化幅 21 から求まる。
     const middle = soundingPianoX(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 0.5));
-    expect(middle).toBeCloseTo(0.25 / 7, 10);
+    expect(middle).toBeCloseTo(0.25 / 21, 10);
+  });
+
+  it('オクターブ境界を鍵盤幅の3分の1ずつに写す', () => {
+    // A4（12半音）は 1/3、A5（24半音）は 2/3 に置き、高域を端へ押し付けないこと。
+    expect(soundingPianoX(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 12))).toBeCloseTo(1 / 3, 10);
+    expect(soundingPianoX(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 24))).toBeCloseTo(2 / 3, 10);
   });
 
   it('Hz に線形な配置にしない', () => {
     // Hz を等分した前半と後半の幅は等しくならないこと。
-    const firstHalf = soundingPianoX(330) - soundingPianoX(SOUNDING_PIANO_LOW_HZ);
-    const secondHalf = soundingPianoX(SOUNDING_PIANO_HIGH_HZ) - soundingPianoX(330);
+    const middleHz = (SOUNDING_PIANO_LOW_HZ + SOUNDING_PIANO_HIGH_HZ) / 2;
+    const firstHalf = soundingPianoX(middleHz) - soundingPianoX(SOUNDING_PIANO_LOW_HZ);
+    const secondHalf = soundingPianoX(SOUNDING_PIANO_HIGH_HZ) - soundingPianoX(middleHz);
     expect(firstHalf).not.toBeCloseTo(secondHalf, 5);
     expect(firstHalf + secondHalf).toBeCloseTo(1, 10);
   });
@@ -59,7 +66,7 @@ describe('発音周波数から鍵盤横位置への写像', () => {
   it('周波数に対して単調に増加する', () => {
     let previous = -1;
     for (let index = 0; index <= 100; index += 1) {
-      const x = soundingPianoX(semitoneAbove(SOUNDING_PIANO_LOW_HZ, index * 0.12));
+      const x = soundingPianoX(semitoneAbove(SOUNDING_PIANO_LOW_HZ, index * 0.36));
       expect(x).toBeGreaterThan(previous);
       previous = x;
     }
@@ -86,23 +93,27 @@ describe('鍵盤の鍵配置', () => {
     expect(isBlackPianoKey(0)).toBe(false);
     expect(isBlackPianoKey(1)).toBe(true);
     expect(isBlackPianoKey(3)).toBe(false);
+    expect(isBlackPianoKey(35)).toBe(true);
+    expect(isBlackPianoKey(36)).toBe(false);
     expect(pianoKeyName(0)).toBe('A3');
     expect(pianoKeyName(12)).toBe('A4');
+    expect(pianoKeyName(24)).toBe('A5');
+    expect(pianoKeyName(36)).toBe('A6');
   });
 
-  it('13鍵を半音順に隙間なく並べる', () => {
+  it('37鍵を半音順に隙間なく並べる', () => {
     const layout = pianoKeyboardLayout();
-    expect(layout).toHaveLength(13);
+    expect(layout).toHaveLength(37);
     // 白鍵は全幅を等分し、黒鍵は白鍵幅より狭く境界を中心に置くこと。
     const whiteKeys = layout.filter((key) => !key.black);
-    expect(whiteKeys).toHaveLength(8);
+    expect(whiteKeys).toHaveLength(22);
     expect(whiteKeys[0]?.x0).toBe(0);
     expect(whiteKeys[whiteKeys.length - 1]?.x1).toBe(1);
     for (const key of layout) {
       if (key.black) {
-        expect(key.x1 - key.x0).toBeCloseTo(BLACK_PIANO_KEY_WIDTH_RATIO / 8, 10);
+        expect(key.x1 - key.x0).toBeCloseTo(BLACK_PIANO_KEY_WIDTH_RATIO / 22, 10);
       } else {
-        expect(key.x1 - key.x0).toBeCloseTo(1 / 8, 10);
+        expect(key.x1 - key.x0).toBeCloseTo(1 / 22, 10);
       }
     }
     // 黒鍵の中心は隣り合う白鍵の境界にあること。
@@ -121,10 +132,13 @@ describe('鍵盤の鍵配置', () => {
 
   it('最も近い鍵を半音位置で返す', () => {
     expect(nearestPianoSemitone(SOUNDING_PIANO_LOW_HZ)).toBe(0);
-    expect(nearestPianoSemitone(SOUNDING_PIANO_HIGH_HZ)).toBe(12);
+    expect(nearestPianoSemitone(SOUNDING_PIANO_HIGH_HZ)).toBe(36);
     // 境界のちょうど中間は避け、近い側を確かめる。
     expect(nearestPianoSemitone(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 0.6))).toBe(1);
     expect(nearestPianoSemitone(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 0.4))).toBe(0);
+    // 高域側の近い側も確かめる。
+    expect(nearestPianoSemitone(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 35.6))).toBe(36);
+    expect(nearestPianoSemitone(semitoneAbove(SOUNDING_PIANO_LOW_HZ, 35.4))).toBe(35);
   });
 });
 

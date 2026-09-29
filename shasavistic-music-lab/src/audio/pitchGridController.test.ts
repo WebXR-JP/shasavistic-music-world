@@ -14,7 +14,7 @@ import {
   createPitchGridController,
   type PitchGridControllerSnapshot,
 } from './pitchGridController';
-import { soundingFrequencyFor } from './pitchGrid';
+import { assignPitchGridFrequencies } from './pitchGrid';
 import type {
   PitchGridSound,
   PitchGridSoundingVoice,
@@ -150,9 +150,8 @@ describe('格子操作の単一制御器', () => {
     const { controller, sound } = createController();
     controller.toggle({ x: 0, y: 0 });
     expect(sound.voiceCalls).toHaveLength(1);
-    expect(sound.voiceCalls[0]).toEqual([
-      { key: '0,0', frequency: soundingFrequencyFor({ x: 0, y: 0 }, 3) },
-    ]);
+    // 配置関数の結果をそのまま全声仕様として渡すこと。
+    expect(sound.voiceCalls[0]).toEqual(assignPitchGridFrequencies([{ x: 0, y: 0 }], 3));
     expectSnapshot(controller.getSnapshot(), 3, [{ x: 0, y: 0 }]);
     controller.toggle({ x: 0, y: 0 });
     expect(sound.voiceCalls).toHaveLength(2);
@@ -169,10 +168,15 @@ describe('格子操作の単一制御器', () => {
     expect(applied).toBe(true);
     // 移動後の集合を一度だけ反映すること。
     expect(sound.voiceCalls).toHaveLength(callsBefore + 1);
-    expect(sound.voiceCalls[callsBefore]).toEqual([
-      { key: '1,1', frequency: soundingFrequencyFor({ x: 1, y: 1 }, 3) },
-      { key: '2,1', frequency: soundingFrequencyFor({ x: 2, y: 1 }, 3) },
-    ]);
+    expect(sound.voiceCalls[callsBefore]).toEqual(
+      assignPitchGridFrequencies(
+        [
+          { x: 1, y: 1 },
+          { x: 2, y: 1 },
+        ],
+        3,
+      ),
+    );
     expectSnapshot(controller.getSnapshot(), 3, [
       { x: 1, y: 1 },
       { x: 2, y: 1 },
@@ -205,10 +209,15 @@ describe('格子操作の単一制御器', () => {
     // 保持した全座標を新次元の周波数で鳴らし直すこと。旧音の停止は切替境界が担い、
     // 通常の停止と差分反映の重ね呼び出しはしないこと。
     expect(sound.switchCalls).toHaveLength(1);
-    expect(sound.switchCalls[0]).toEqual([
-      { key: '0,0', frequency: soundingFrequencyFor({ x: 0, y: 0 }, 4) },
-      { key: '1,0', frequency: soundingFrequencyFor({ x: 1, y: 0 }, 4) },
-    ]);
+    expect(sound.switchCalls[0]).toEqual(
+      assignPitchGridFrequencies(
+        [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+        ],
+        4,
+      ),
+    );
     expect(sound.stopAllCalls).toBe(0);
     expect(sound.voiceCalls).toHaveLength(voiceCallsBefore);
     expectSnapshot(controller.getSnapshot(), 4, [
@@ -241,10 +250,15 @@ describe('格子操作の単一制御器', () => {
     const voiceCallsBefore = sound.voiceCalls.length;
     controller.toggle({ x: 1, y: 0 });
     expect(sound.voiceCalls).toHaveLength(voiceCallsBefore + 1);
-    expect(sound.voiceCalls[voiceCallsBefore]).toEqual([
-      { key: '0,0', frequency: soundingFrequencyFor({ x: 0, y: 0 }, 4) },
-      { key: '1,0', frequency: soundingFrequencyFor({ x: 1, y: 0 }, 4) },
-    ]);
+    expect(sound.voiceCalls[voiceCallsBefore]).toEqual(
+      assignPitchGridFrequencies(
+        [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+        ],
+        4,
+      ),
+    );
     expectSnapshot(controller.getSnapshot(), 4, [
       { x: 0, y: 0 },
       { x: 1, y: 0 },
@@ -304,7 +318,8 @@ describe('格子操作の単一制御器の表示用保持中一覧', () => {
     const { controller, sound } = createController();
     controller.toggle({ x: 0, y: 0 });
     // 音声側の再開成立を模し、表示用の保持中一覧だけを差し替えること。
-    const frequency = soundingFrequencyFor({ x: 0, y: 0 }, 3);
+    const [assigned] = assignPitchGridFrequencies([{ x: 0, y: 0 }], 3);
+    const frequency = assigned.frequency;
     sound.setSoundingForTest([{ key: '0,0', frequency }]);
     expect(controller.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
   });
@@ -327,7 +342,8 @@ describe('格子操作の単一制御器の表示用保持中一覧', () => {
     const { controller, sound, notified } = createController();
     controller.toggle({ x: 0, y: 0 });
     const callsBefore = notified();
-    const frequency = soundingFrequencyFor({ x: 0, y: 0 }, 3);
+    const [assigned] = assignPitchGridFrequencies([{ x: 0, y: 0 }], 3);
+    const frequency = assigned.frequency;
     sound.setSoundingForTest([{ key: '0,0', frequency }]);
     // 音声側の購読が制御器の既存通知へ転送され、快照が新しい一覧を返すこと。
     expect(notified()).toBeGreaterThan(callsBefore);

@@ -25,7 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { allPitchGridPoints, pitchGridKey, soundingFrequencyFor } from './pitchGrid';
+import { allPitchGridPoints, assignPitchGridFrequencies, pitchGridKey } from './pitchGrid';
+import type { PitchGridAssignedVoice } from './pitchGrid';
 import type { PitchGridSound, PitchGridSoundContext } from './pitchGridSound';
 
 /** 採取に使う実ブラウザの起動引数。発声を抑え、操作なしで文脈を開始できる形にする。 */
@@ -154,6 +155,23 @@ interface SoloOffCaptureInput {
   readonly stoppedRmsRatioMax: number;
   readonly measuredFrequencies: number[];
   readonly searchBins: number;
+}
+
+/**
+ * 集合単位の配置結果から鍵に対応する発音周波数を取り出す。
+ *
+ * 配置にない鍵は検査の組み立て誤りのため、採取前に落とす。
+ *
+ * @param assigned - 集合単位の配置結果。
+ * @param key - 取り出す声の鍵。
+ * @returns 配置で選ばれた発音周波数（Hz）。
+ */
+function assignedFrequencyOf(assigned: readonly PitchGridAssignedVoice[], key: string): number {
+  const found = assigned.find((voice) => voice.key === key);
+  if (found === undefined) {
+    throw new Error(`配置にない声の鍵である: ${key}`);
+  }
+  return found.frequency;
 }
 
 /**
@@ -610,14 +628,16 @@ describe('格子の個別声の音声信号採取', () => {
       // 実コードを依存ごとそのまま実ブラウザへ送る。実行時挙動への変更は加えない。
       const moduleCode = await loadPitchGridModuleCode();
       // 15点すべての声を開始し、合成の頂上も同じ条件で確かめる。
-      const specs: CaptureVoiceSpec[] = allPitchGridPoints().map((point) => ({
-        key: pitchGridKey(point),
-        frequency: soundingFrequencyFor(point, CAPTURE_DIMENSION),
+      // 同時発音の周波数は集合単位の配置に従う。期待値も同じ配置から求める。
+      const assigned = assignPitchGridFrequencies(allPitchGridPoints(), CAPTURE_DIMENSION);
+      const specs: CaptureVoiceSpec[] = assigned.map((voice) => ({
+        key: voice.key,
+        frequency: voice.frequency,
       }));
       // 中央・右・上の声を区別可能な基音として測る。他声の高調波と重ならないこと。
-      const centerHz = soundingFrequencyFor({ x: 0, y: 0 }, CAPTURE_DIMENSION);
-      const rightHz = soundingFrequencyFor({ x: 1, y: 0 }, CAPTURE_DIMENSION);
-      const upperHz = soundingFrequencyFor({ x: 0, y: 1 }, CAPTURE_DIMENSION);
+      const centerHz = assignedFrequencyOf(assigned, pitchGridKey({ x: 0, y: 0 }));
+      const rightHz = assignedFrequencyOf(assigned, pitchGridKey({ x: 1, y: 0 }));
+      const upperHz = assignedFrequencyOf(assigned, pitchGridKey({ x: 0, y: 1 }));
 
       const { browser, version } = await launchCaptureBrowser();
       try {
@@ -699,12 +719,14 @@ describe('格子の個別声の音声信号採取', () => {
     '音声グラフの標本で個別のオフと他点の継続・全停止後の消音を判定する',
     async () => {
       const moduleCode = await loadPitchGridModuleCode();
-      // 中央 220Hz と上 275Hz の二声。275Hz は 220Hz の低い倍音列に現れない。
-      // （275/220 = 5/4 のため、一致は 1100Hz の5次・4次が最初であり測定対象外である）
+      // 二声の同時発音は集合単位の配置に従う（単点の値とは限らない）。
+      // 中央 440Hz と上 550Hz の二声。550Hz は 440Hz の低い倍音列に現れない。
+      // （550/440 = 5/4 のため、一致は 2200Hz の5次・4次が最初であり測定対象外である）
       const firstPoint = { x: 0, y: 0 };
       const secondPoint = { x: 0, y: 1 };
-      const firstHz = soundingFrequencyFor(firstPoint, CAPTURE_DIMENSION);
-      const secondHz = soundingFrequencyFor(secondPoint, CAPTURE_DIMENSION);
+      const pairAssigned = assignPitchGridFrequencies([firstPoint, secondPoint], CAPTURE_DIMENSION);
+      const firstHz = assignedFrequencyOf(pairAssigned, pitchGridKey(firstPoint));
+      const secondHz = assignedFrequencyOf(pairAssigned, pitchGridKey(secondPoint));
       // ノコギリ波の2次までの倍音として現れる次数。440Hz は第一声だけの成分である。
       const measured = [firstHz, secondHz, firstHz * 2, secondHz * 2];
 
