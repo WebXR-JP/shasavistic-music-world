@@ -102,17 +102,6 @@ export function pianoKeyName(semitone: number): string {
   return KEY_NAMES[semitone];
 }
 
-/**
- * ド（C4）の半音位置を返す。
- *
- * 鍵盤上に「ド／C4」と示す鍵の特定に使う。
- *
- * @returns C4 の半音位置（3）。
- */
-export function doPianoSemitone(): number {
-  return 3;
-}
-
 /** 鍵盤上の鍵の配置。描画の矩形算出に使う。 */
 export interface PianoKeyLayout {
   /** A3 からの半音位置。0…36 の整数。 */

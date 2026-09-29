@@ -1,11 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import type { PitchGridSoundingVoice } from '../../audio/pitchGridSound';
-import {
-  doPianoSemitone,
-  layoutSoundingDots,
-  pianoKeyboardLayout,
-} from './soundingPianoLayout';
+import { layoutSoundingDots, pianoKeyboardLayout } from './soundingPianoLayout';
 
 /**
  * 鳴り中音高パネルの中心（部品内座標）。
@@ -110,7 +106,7 @@ function soundingVoicesSignature(voices: readonly PitchGridSoundingVoice[]): str
     .join('|');
 }
 
-// 鍵盤の静的部分を描く。A3 … A6 の通常の並びとし、C4 をド・C4 として示す。
+// 鍵盤の静的部分を描く。A3 … A6 の通常の並びとし、各白鍵に鍵名を示す。
 // 点の動的部分は別描画とする。
 function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
   const width = SOUNDING_PIANO_CANVAS_WIDTH;
@@ -138,8 +134,7 @@ function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
   drawing.font = '22px sans-serif';
   drawing.fillText('減衰中の尾音は含まない', width - 24, SOUNDING_PIANO_LEGEND_Y);
 
-  // 白鍵22鍵を全幅に並べる。C4 だけはド・C4 と記し、他は鍵名を小さく添える。
-  const doSemitone = doPianoSemitone();
+  // 白鍵22鍵を全幅に並べる。各鍵は鍵名を等しい体裁で示す。
   for (const key of pianoKeyboardLayout()) {
     if (key.black) {
       continue;
@@ -152,15 +147,9 @@ function drawStaticKeyboard(drawing: CanvasRenderingContext2D): void {
     drawing.lineWidth = 2;
     drawing.strokeRect(x, keyboardTop, keyWidth, height - keyboardTop);
     drawing.textAlign = 'center';
-    if (key.semitone === doSemitone) {
-      drawing.fillStyle = '#111111';
-      drawing.font = 'bold 30px sans-serif';
-      drawing.fillText('ド／C4', x + keyWidth / 2, height - 26);
-    } else {
-      drawing.fillStyle = '#5a5a6a';
-      drawing.font = '22px sans-serif';
-      drawing.fillText(key.name, x + keyWidth / 2, height - 24);
-    }
+    drawing.fillStyle = '#5a5a6a';
+    drawing.font = '22px sans-serif';
+    drawing.fillText(key.name, x + keyWidth / 2, height - 24);
   }
 
   // 黒鍵15鍵を白鍵の上部に重ねる。

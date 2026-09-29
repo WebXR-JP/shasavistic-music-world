@@ -12,7 +12,6 @@ import {
   BLACK_PIANO_KEY_WIDTH_RATIO,
   SOUNDING_PIANO_HIGH_HZ,
   SOUNDING_PIANO_LOW_HZ,
-  doPianoSemitone,
   isBlackPianoKey,
   layoutSoundingDots,
   nearestPianoSemitone,
@@ -84,9 +83,12 @@ describe('発音周波数から鍵盤横位置への写像', () => {
 });
 
 describe('鍵盤の鍵配置', () => {
-  it('C4 をドの半音位置とする', () => {
-    expect(doPianoSemitone()).toBe(3);
-    expect(pianoKeyName(doPianoSemitone())).toBe('C4');
+  it('C4 を鍵名で示す', () => {
+    expect(pianoKeyName(3)).toBe('C4');
+    const whiteNames = pianoKeyboardLayout()
+      .filter((key) => !key.black)
+      .map((key) => key.name);
+    expect(whiteNames).toContain('C4');
   });
 
   it('白鍵と黒鍵を通常の並びで分ける', () => {
