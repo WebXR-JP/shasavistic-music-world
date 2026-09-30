@@ -4,7 +4,7 @@
 
 ## 前提とする親・兄弟の制約
 
-オン集合と次元選択の所有、移動と切替の意味は親を、座標から周波数への定め方は兄弟を参照する。要求を再定義しない。
+オン集合と次元選択の所有、移動と切替の意味は親を、座標から周波数への定め方は兄弟を参照する。共有快照からの反映の結び付けは兄弟の遠隔共有を参照する。要求を再定義しない。
 
 ## 確定した方式
 
@@ -44,5 +44,6 @@
 
 - `workflow/design/shasavistic-music-lab/pitch-grid.md`（所有と移動・切替の意味の参照元）
 - `workflow/design/shasavistic-music-lab/pitch-grid/pitch-assignment.md`（周波数の定め方の参照元）
+- `workflow/design/shasavistic-music-lab/pitch-grid/remote-sync.md`（共有快照からの反映の結び付けの参照先）
 - `workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md`（再利用可能な包絡の参照先）
 - `workflow/design/shasavistic-music-lab.md`（常設診断口を作らない境界の参照元）

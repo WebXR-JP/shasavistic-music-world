@@ -19,8 +19,23 @@
     "outputDevice": "",
     "volume": "",
     "tabMuted": false,
-    "joinState": ""
+    "joinState": "",
+    "audioEnabled": ""
   },
+  "clients": [
+    {
+      "label": "",
+      "browser": "",
+      "device": "",
+      "outputDevice": "",
+      "volume": "",
+      "tabMuted": false,
+      "joinState": "",
+      "audioEnabled": "",
+      "heard": "",
+      "note": ""
+    }
+  ],
   "silenceControl": {
     "checked": false,
     "note": ""
@@ -94,6 +109,11 @@
       "note": ""
     },
     "soundingPianoReadableUnobstructed": {
+      "result": "",
+      "operationIds": [],
+      "note": ""
+    },
+    "intentMatch": {
       "result": "",
       "operationIds": [],
       "note": ""
