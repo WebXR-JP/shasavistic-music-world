@@ -16,14 +16,21 @@ import {
   PITCH_GRID_SOUND_LOW_HZ,
   allPitchGridPoints,
   assignPitchGridFrequencies,
-  createPitchGridState,
   isInPitchGrid,
   logicalRatioFor,
+  movePitchGridIntent,
+  PITCH_GRID_INITIAL_INTENT,
   pitchGridKey,
+  pitchGridPointFromKey,
+  pitchGridSnapshotFromIntent,
+  resolvePitchGridIntent,
+  selectPitchGridDimensionIntent,
   shiftPitchGridPoints,
   soundingCandidatesFor,
+  togglePitchGridIntent,
   verticalPrimeFor,
   type PitchGridDimension,
+  type PitchGridIntent,
   type PitchGridPoint,
 } from './pitchGrid';
 
@@ -459,14 +466,31 @@ describe('集合単位の発音配置', () => {
   });
 });
 
-describe('オン集合の状態遷移', () => {
+describe('共有意図への純粋な遷移', () => {
   it('点のオン・オフを切り替える', () => {
-    const state = createPitchGridState();
-    expect(state.getSnapshot().points).toEqual([]);
-    state.toggle({ x: 0, y: 0 });
-    expect(state.getSnapshot().points).toEqual([{ x: 0, y: 0 }]);
-    state.toggle({ x: 0, y: 0 });
-    expect(state.getSnapshot().points).toEqual([]);
+    const turnedOn = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    expect(turnedOn).toEqual({ dimension: 3, onPoints: ['0,0'] });
+    const turnedOff = togglePitchGridIntent(turnedOn, { x: 0, y: 0 });
+    expect(turnedOff).toEqual({ dimension: 3, onPoints: [] });
+  });
+
+  it('切替は固定座標順に正規化する', () => {
+    // 操作順によらず `y` 降順・`x` 昇順に並ぶこと。
+    let intent = PITCH_GRID_INITIAL_INTENT;
+    for (const point of [
+      { x: 1, y: 0 },
+      { x: -2, y: -1 },
+      { x: 0, y: 1 },
+    ]) {
+      intent = togglePitchGridIntent(intent, point);
+    }
+    expect(intent.onPoints).toEqual(['0,1', '1,0', '-2,-1']);
+  });
+
+  it('切替は重複を作らない', () => {
+    const duplicated: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '0,0'] };
+    const next = togglePitchGridIntent(duplicated, { x: 1, y: 0 });
+    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'] });
   });
 
   it('八方向の平行移動で集合全体がずれる', () => {
@@ -481,92 +505,70 @@ describe('オン集合の状態遷移', () => {
       [-1, -1],
     ];
     for (const [dx, dy] of directions) {
-      const state = createPitchGridState();
-      state.toggle({ x: 0, y: 0 });
-      const result = state.move(dx, dy);
-      expect(result.applied).toBe(true);
-      expect(result.snapshot.points).toEqual([{ x: dx, y: dy }]);
+      const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+      expect(movePitchGridIntent(intent, dx, dy)).toEqual({
+        dimension: 3,
+        onPoints: [`${dx},${dy}`],
+      });
     }
   });
 
   it('移動で重なった点を固定点として残さない', () => {
     // 移動前の集合をそのまま平行移動したものになり、重なりを特別扱いしないこと。
-    const state = createPitchGridState();
-    state.toggle({ x: 0, y: 0 });
-    state.toggle({ x: 1, y: 0 });
-    const result = state.move(1, 0);
-    expect(result.applied).toBe(true);
-    expect(result.snapshot.points).toEqual([
-      { x: 1, y: 0 },
-      { x: 2, y: 0 },
-    ]);
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '1,0'] };
+    expect(movePitchGridIntent(intent, 1, 0)).toEqual({
+      dimension: 3,
+      onPoints: ['1,0', '2,0'],
+    });
   });
 
   it('端での移動は集合全体について行わない', () => {
-    const state = createPitchGridState();
-    state.toggle({ x: 2, y: 0 });
-    const result = state.move(1, 0);
-    expect(result.applied).toBe(false);
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['2,0'] };
+    const result = movePitchGridIntent(intent, 1, 0);
     // 集合は変わらず、折り返しもしないこと。
-    expect(result.snapshot.points).toEqual([{ x: 2, y: 0 }]);
+    expect(result.onPoints).toEqual(['2,0']);
     // 一つでも外へ出る場合は全体を拒否すること。
-    const crowded = createPitchGridState();
-    crowded.toggle({ x: 0, y: 0 });
-    crowded.toggle({ x: 2, y: 1 });
-    const rejected = crowded.move(0, 1);
-    expect(rejected.applied).toBe(false);
-    expect(rejected.snapshot.points).toEqual([
-      { x: 2, y: 1 },
-      { x: 0, y: 0 },
-    ]);
+    const crowded: PitchGridIntent = { dimension: 3, onPoints: ['2,1', '0,0'] };
+    expect(movePitchGridIntent(crowded, 0, 1).onPoints).toEqual(['2,1', '0,0']);
   });
 
   it('空集合の移動は適用しない', () => {
-    const state = createPitchGridState();
-    const result = state.move(1, 0);
-    expect(result.applied).toBe(false);
-    expect(result.snapshot.points).toEqual([]);
+    expect(movePitchGridIntent(PITCH_GRID_INITIAL_INTENT, 1, 0).onPoints).toEqual([]);
   });
 
   it('次元切替でオン集合を保持して次元だけを変える', () => {
-    const state = createPitchGridState();
-    state.toggle({ x: 0, y: 0 });
-    state.toggle({ x: 1, y: -1 });
-    const result = state.selectDimension(4);
-    expect(result.changed).toBe(true);
-    expect(result.snapshot.dimension).toBe(4);
-    expect(result.snapshot.points).toEqual([
-      { x: 0, y: 0 },
-      { x: 1, y: -1 },
-    ]);
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '1,-1'] };
+    expect(selectPitchGridDimensionIntent(intent, 4)).toEqual({
+      dimension: 4,
+      onPoints: ['0,0', '1,-1'],
+    });
   });
 
   it('空集合の次元切替は次元だけを変える', () => {
-    const state = createPitchGridState();
-    const result = state.selectDimension(4);
-    expect(result.changed).toBe(true);
-    expect(result.snapshot.dimension).toBe(4);
-    expect(result.snapshot.points).toEqual([]);
+    expect(selectPitchGridDimensionIntent(PITCH_GRID_INITIAL_INTENT, 4)).toEqual({
+      dimension: 4,
+      onPoints: [],
+    });
   });
 
   it('同じ次元の選び直しは何もしない', () => {
-    const state = createPitchGridState();
-    state.toggle({ x: 0, y: 0 });
-    const result = state.selectDimension(3);
-    expect(result.changed).toBe(false);
-    expect(result.snapshot.points).toEqual([{ x: 0, y: 0 }]);
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+    expect(selectPitchGridDimensionIntent(intent, 3)).toBe(intent);
   });
 
-  it('不正な操作は状態を変えずに拒む', () => {
-    const state = createPitchGridState();
-    state.toggle({ x: 0, y: 0 });
-    expect(() => state.toggle({ x: 3, y: 0 })).toThrow();
-    expect(state.getSnapshot().points).toEqual([{ x: 0, y: 0 }]);
-    expect(() => state.move(0, 0)).toThrow(RangeError);
-    expect(() => state.move(2, 0)).toThrow(RangeError);
-    expect(state.getSnapshot().points).toEqual([{ x: 0, y: 0 }]);
-    expect(() => state.selectDimension(2 as never)).toThrow(RangeError);
-    expect(state.getSnapshot().dimension).toBe(3);
+  it('不正な操作は共有値を変えずに拒む', () => {
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+    expect(() => togglePitchGridIntent(intent, { x: 3, y: 0 })).toThrow();
+    expect(() => movePitchGridIntent(intent, 0, 0)).toThrow(RangeError);
+    expect(() => movePitchGridIntent(intent, 2, 0)).toThrow(RangeError);
+    expect(() => selectPitchGridDimensionIntent(intent, 2 as never)).toThrow(RangeError);
+  });
+
+  it('壊れた共有値を引き継いでも正規化して遷移する', () => {
+    // 他端末の書き込みが型どおりでない場合も、遷移の前提として読み替えること。
+    const broken = { dimension: 9, onPoints: ['0,0', '鍵でない', '3,0'] } as unknown as PitchGridIntent;
+    const next = togglePitchGridIntent(broken, { x: 1, y: 0 });
+    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'] });
   });
 
   it('純粋な平行移動は格子外で空振りする', () => {
@@ -589,5 +591,53 @@ describe('オン集合の状態遷移', () => {
       ),
     ).toBe(null);
     expect(shiftPitchGridPoints([], 1, 0)).toBe(null);
+  });
+});
+
+describe('共有意図の読み替え', () => {
+  it('座標鍵を格子点へ読み替える', () => {
+    expect(pitchGridPointFromKey('0,0')).toEqual({ x: 0, y: 0 });
+    expect(pitchGridPointFromKey('-2,1')).toEqual({ x: -2, y: 1 });
+    // 格子外・鍵でない値・文字列でない値は落とすこと。
+    expect(pitchGridPointFromKey('3,0')).toBe(null);
+    expect(pitchGridPointFromKey('0,2')).toBe(null);
+    expect(pitchGridPointFromKey('止める')).toBe(null);
+    expect(pitchGridPointFromKey('')).toBe(null);
+    expect(pitchGridPointFromKey(',')).toBe(null);
+    expect(pitchGridPointFromKey(null)).toBe(null);
+    expect(pitchGridPointFromKey(0)).toBe(null);
+  });
+
+  it('不正な共有値を正規化して読み替える', () => {
+    // 共有機構から届く値は型どおりとは限らないため、境界で確かめること。
+    expect(resolvePitchGridIntent(null)).toEqual(PITCH_GRID_INITIAL_INTENT);
+    expect(resolvePitchGridIntent({})).toEqual({ dimension: 3, onPoints: [] });
+    expect(
+      resolvePitchGridIntent({
+        dimension: 4,
+        onPoints: ['1,0', '0,1', '1,0', '9,9', '鍵でない', 5, null],
+      }),
+    ).toEqual({ dimension: 4, onPoints: ['0,1', '1,0'] });
+    // 不正な次元は初期次元に倒し、配列でない点列は空とすること。
+    expect(resolvePitchGridIntent({ dimension: 9, onPoints: ['0,0'] })).toEqual({
+      dimension: 3,
+      onPoints: ['0,0'],
+    });
+    expect(resolvePitchGridIntent({ dimension: 4, onPoints: '0,0' })).toEqual({
+      dimension: 4,
+      onPoints: [],
+    });
+  });
+
+  it('快照への読み替えは固定座標順の座標列になる', () => {
+    expect(pitchGridSnapshotFromIntent({ dimension: 4, onPoints: ['1,0', '0,1'] })).toEqual({
+      dimension: 4,
+      points: [
+        { x: 0, y: 1 },
+        { x: 1, y: 0 },
+      ],
+    });
+    // 不正な共有値でも表示と反映に使える快照になること。
+    expect(pitchGridSnapshotFromIntent(null)).toEqual({ dimension: 3, points: [] });
   });
 });

@@ -1,16 +1,26 @@
-import { Interactable } from '@xrift/world-components';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Interactable, useInstanceState } from '@xrift/world-components';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   allPitchGridPoints,
+  isInPitchGrid,
+  isPitchGridDimension,
+  movePitchGridIntent,
+  PITCH_GRID_INITIAL_INTENT,
+  PITCH_GRID_INTENT_STATE_ID,
   PITCH_GRID_VERTICAL_PRIMES,
   pitchGridKey,
+  pitchGridSnapshotFromIntent,
+  selectPitchGridDimensionIntent,
+  shiftPitchGridPoints,
+  togglePitchGridIntent,
   type PitchGridDimension,
+  type PitchGridIntent,
   type PitchGridPoint,
 } from '../../audio/pitchGrid';
 import {
-  createPitchGridController,
-  type PitchGridController,
-  type PitchGridControllerSnapshot,
+  createPitchGridSoundReflector,
+  type PitchGridSoundReflector,
+  type PitchGridSoundSnapshot,
 } from '../../audio/pitchGridController';
 import { TextPlate } from './plates';
 import { SOUNDING_PIANO_POSITION, SOUNDING_PIANO_SIZE, SoundingPiano } from './SoundingPiano';
@@ -114,46 +124,91 @@ function pointLabel(point: PitchGridPoint): string {
 /**
  * 15 Cube による音高格子の操作部品。
  *
- * 格子15点・八方向移動・次元選択の操作を一つの制御器へ集める。制御器と
- * 音声文脈はこの部品の存続中は一つだけ保ち、Cube ごとに作らない。文脈を
- * 閉じるのはこの部品の破棄時に一度だけである。オン・オフ、軸、操作対象は
- * 銘板の文言と明暗・枠でも示し、色だけに頼らない。ワールド側は配置だけを担う。
+ * 演奏意図の唯一の所有者は共有機構（`useInstanceState`）に置き、
+ * 格子15点・八方向移動・次元選択の操作は純粋な遷移として関数型更新へ渡す。
+ * 音声文脈と発音中の声は各端末ローカルのまま反射器で保ち、
+ * 共有快照の変化を自端末の音へ反映する。実際に鳴った声の表示も端末内に保つ。
+ * オン・オフ、軸、操作対象は銘板の文言と明暗・枠でも示し、色だけに頼らない。
+ * ワールド側は配置だけを担う。
  */
 export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<PitchGridControllerSnapshot>(() => ({
-    dimension: 3,
-    points: [],
+  // 演奏意図の所有者は共有機構に置く。同時操作の取りこぼし
+  // （後に届いた書き込みが残る）は許容する。
+  const [intent, setIntent] = useInstanceState<PitchGridIntent>(
+    PITCH_GRID_INTENT_STATE_ID,
+    PITCH_GRID_INITIAL_INTENT,
+  );
+  // 共有値は境界で確かめてから表示と反映に使う。
+  const snapshot = useMemo(() => pitchGridSnapshotFromIntent(intent), [intent]);
+  // 実際に鳴った声の表示は各端末ローカルに保つ。意図の共有と発音成立は別物とする。
+  const [soundSnapshot, setSoundSnapshot] = useState<PitchGridSoundSnapshot>(() => ({
     voiceCount: 0,
     soundingVoices: [],
   }));
-  // 親操作部品の存続に対応する制御器。演奏口の生成は初回の発音まで遅らせる。
-  const controllerRef = useRef<PitchGridController | null>(null);
+  // 親操作部品の存続に対応する反射器。演奏口の生成は初回の発音まで遅らせる。
+  const reflectorRef = useRef<PitchGridSoundReflector | null>(null);
 
   useEffect(() => {
-    const controller = createPitchGridController({
+    const reflector = createPitchGridSoundReflector({
       notify: () => {
-        setSnapshot(controller.getSnapshot());
+        setSoundSnapshot({ ...reflector.getSnapshot() });
       },
     });
-    controllerRef.current = controller;
-    setSnapshot(controller.getSnapshot());
+    reflectorRef.current = reflector;
     return () => {
-      controllerRef.current = null;
-      void controller.dispose();
+      reflectorRef.current = null;
+      void reflector.dispose();
     };
   }, []);
 
-  const handleToggle = useCallback((point: PitchGridPoint) => {
-    controllerRef.current?.toggle(point);
-  }, []);
+  // 共有快照の変化を自端末の音へ反映する。自分の操作と遠隔の変化を区別せず、
+  // 同じ一経路に寄せて二重発火を作らない。同値の再反映の抑止は設けず、
+  // 音声側の継続分岐に寄せる。
+  useEffect(() => {
+    const reflector = reflectorRef.current;
+    if (reflector === null) {
+      return;
+    }
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    setSoundSnapshot({ ...reflector.getSnapshot() });
+  }, [intent]);
 
-  const handleMove = useCallback((dx: number, dy: number) => {
-    controllerRef.current?.move(dx, dy);
-  }, []);
+  const handleToggle = useCallback(
+    (point: PitchGridPoint) => {
+      // 格子外は共有へ送らず同期的に拒む。更新口の中での投げでは到達が遅れるため先に確かめる。
+      if (!isInPitchGrid(point)) {
+        throw new Error(`格子外の座標である: (${String(point.x)}, ${String(point.y)})`);
+      }
+      setIntent((prev) => togglePitchGridIntent(prev, point));
+    },
+    [setIntent],
+  );
 
-  const handleSelectDimension = useCallback((dimension: PitchGridDimension) => {
-    controllerRef.current?.selectDimension(dimension);
-  }, []);
+  const handleMove = useCallback(
+    (dx: number, dy: number) => {
+      // 移動量の正当性はここで同期的に確かめ、不正時は共有へ送らずに投げる。
+      // 空集合・格子外への移動は共有へ書かず、音声へも触れない。
+      const shifted = shiftPitchGridPoints(snapshot.points, dx, dy);
+      if (shifted === null) {
+        return;
+      }
+      setIntent((prev) => movePitchGridIntent(prev, dx, dy));
+    },
+    [setIntent, snapshot],
+  );
+
+  const handleSelectDimension = useCallback(
+    (dimension: PitchGridDimension) => {
+      if (!isPitchGridDimension(dimension)) {
+        throw new RangeError(`縦軸の次元は3・4・5のいずれかであること: ${String(dimension)}`);
+      }
+      if (dimension === snapshot.dimension) {
+        return;
+      }
+      setIntent((prev) => selectPitchGridDimensionIntent(prev, dimension));
+    },
+    [setIntent, snapshot],
+  );
 
   const onKeys = new Set(snapshot.points.map((point) => pitchGridKey(point)));
   const verticalPrime = PITCH_GRID_VERTICAL_PRIMES[snapshot.dimension];
@@ -164,7 +219,7 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
       {/* 座標・寸法は格子上方の初期候補であり、実画面の確認で決める。 */}
       {/* 格子最上段の銘板・移動パッド・次元釦・奥側の理論説明とは重ねない。 */}
       <SoundingPiano
-        voices={snapshot.soundingVoices}
+        voices={soundSnapshot.soundingVoices}
         position={SOUNDING_PIANO_POSITION}
         size={SOUNDING_PIANO_SIZE}
       />

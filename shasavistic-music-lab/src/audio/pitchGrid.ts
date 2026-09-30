@@ -591,105 +591,197 @@ export interface PitchGridSnapshot {
   readonly points: readonly PitchGridPoint[];
 }
 
-/** 選択次元とオン集合を所有する状態。音声への反映は担わない。 */
-export interface PitchGridState {
-  /** 現在の快照を返す。 */
-  getSnapshot(): PitchGridSnapshot;
-  /**
-   * 指定した点のオン・オフを切り替える。
-   *
-   * @param point - 操作した格子点。範囲内であること。
-   * @returns 切替後の快照。
-   * @throws `Error` — 格子外の座標の場合。状態は変えない。
-   */
-  toggle(point: PitchGridPoint): PitchGridSnapshot;
-  /**
-   * オン集合全体を八方向へ1マス移動する。
-   *
-   * @param dx - 横方向の移動量。`-1…1` の整数。
-   * @param dy - 縦方向の移動量。`-1…1` の整数。両方が0ではならない。
-   * @returns 適用可否と移動後の快照。格子外へ出る・空集合の場合は適用せず、集合は変わらない。
-   * @throws `RangeError` — 移動量が八方向のいずれでもない場合。状態は変えない。
-   */
-  move(dx: number, dy: number): { readonly applied: boolean; readonly snapshot: PitchGridSnapshot };
-  /**
-   * 縦軸の次元を選び直す。
-   *
-   * 切替ではオン集合を保ち、選択次元だけを更新する。
-   * 同じ次元の選び直しは何もしない。
-   *
-   * @param dimension - 選択次元。
-   * @returns 切替の有無と切替後の快照。
-   * @throws `RangeError` — 選択次元でない場合。状態は変えない。
-   */
-  selectDimension(dimension: PitchGridDimension): {
-    readonly changed: boolean;
-    readonly snapshot: PitchGridSnapshot;
-  };
+/**
+ * 共有する演奏意図。選択次元とオンの格子点集合だけを載せる。
+ *
+ * 発振器や実際に鳴っている声は載せず、各端末に残す。
+ * `onPoints` は重複を除き固定座標順（`y` 降順、次いで `x` 昇順）に
+ * 正規化した座標鍵（`x,y` 形式）の配列とし、直列化できる形にする。
+ * `Map` は載せない。
+ */
+export interface PitchGridIntent {
+  /** 選択次元。 */
+  readonly dimension: PitchGridDimension;
+  /** 正規化した座標鍵の配列。固定座標順に並ぶ。 */
+  readonly onPoints: readonly string[];
+}
+
+/**
+ * 共有意図の状態識別子。ワールド・インスタンス内で一意にする。
+ *
+ * 格子15点分の識別子に分けず、一つの識別子に選択次元とオン点列を載せる。
+ */
+export const PITCH_GRID_INTENT_STATE_ID = 'pitch-grid-intent';
+
+/** 共有意図の初期値。何も選んでいない3次元の状態。 */
+export const PITCH_GRID_INITIAL_INTENT: PitchGridIntent = { dimension: 3, onPoints: [] };
+
+/**
+ * 座標鍵を格子点へ読み替える。
+ *
+ * @param key - 判定対象。共有機構から届いた値も受け付ける。
+ * @returns 範囲内の整数座標を表す場合だけ格子点、そうでなければ `null`。
+ */
+export function pitchGridPointFromKey(key: unknown): PitchGridPoint | null {
+  if (typeof key !== 'string' || !/^-?\d+,-?\d+$/.test(key)) {
+    return null;
+  }
+  const separator = key.indexOf(',');
+  const point = { x: Number(key.slice(0, separator)), y: Number(key.slice(separator + 1)) };
+  return isInPitchGrid(point) ? point : null;
 }
 
 function sortPoints(points: Iterable<PitchGridPoint>): PitchGridPoint[] {
   return [...points].sort((a, b) => b.y - a.y || a.x - b.x);
 }
 
-/**
- * 選択次元とオン集合を所有する状態を作る。
- *
- * 音声への反映は担わず、集合の意味だけを保つ。発音の有無の
- * 判断（空集合の無発音など）は反映側がこの結果に従う。
- *
- * @param initialDimension - 初期の選択次元。省略時は3次元。
- * @returns 親操作部品の存続中は使い回す状態。
- */
-export function createPitchGridState(
-  initialDimension: PitchGridDimension = 3,
-): PitchGridState {
-  if (!isPitchGridDimension(initialDimension)) {
-    throw new RangeError(`縦軸の次元は3・4・5のいずれかであること: ${String(initialDimension)}`);
+// 座標鍵の列を正規化する。鍵でない要素と格子外の座標を落とし、
+// 重複を除き固定座標順に並べる。共有値の読み替えと遷移の前提整えで共有し、
+// 処理順・操作履歴が結果を変えないようにする。
+function normalizePitchGridKeys(keys: readonly unknown[]): string[] {
+  const points = new Map<string, PitchGridPoint>();
+  for (const key of keys) {
+    const point = pitchGridPointFromKey(key);
+    if (point === null) {
+      continue;
+    }
+    const canonical = pitchGridKey(point);
+    if (!points.has(canonical)) {
+      points.set(canonical, point);
+    }
   }
-  let dimension = initialDimension;
-  const onPoints = new Map<string, PitchGridPoint>();
+  return sortPoints(points.values()).map(pitchGridKey);
+}
 
-  const snapshot = (): PitchGridSnapshot => ({ dimension, points: sortPoints(onPoints.values()) });
+/**
+ * 共有機構から届いた値を演奏意図として読み替える。
+ *
+ * 共有値は他端末の書き込みであり、型どおりとは限らないため、
+ * 境界で実行時に確かめて正規化する。次元が不正なら初期次元（3次元）に倒し、
+ * 鍵でない要素と格子外の座標は落とす。読み替えだけを行い、
+ * 共有値への書き戻しはしない。
+ *
+ * @param value - 共有機構から届いた値。
+ * @returns 正規化した演奏意図。
+ */
+export function resolvePitchGridIntent(value: unknown): PitchGridIntent {
+  if (typeof value !== 'object' || value === null) {
+    return { ...PITCH_GRID_INITIAL_INTENT };
+  }
+  const record = value as { readonly dimension?: unknown; readonly onPoints?: unknown };
+  const dimension = isPitchGridDimension(record.dimension) ? record.dimension : 3;
+  const raw = Array.isArray(record.onPoints) ? record.onPoints : [];
+  return { dimension, onPoints: normalizePitchGridKeys(raw) };
+}
 
+/**
+ * 演奏意図を表示・反映用の快照へ読み替える。
+ *
+ * 共有値は境界で確かめて正規化してから座標へ戻す。座標の順序は
+ * 固定座標順（`y` 降順、次いで `x` 昇順）になる。
+ *
+ * @param value - 共有機構から届いた値または演奏意図。
+ * @returns 選択次元とオンの座標列。
+ */
+export function pitchGridSnapshotFromIntent(value: unknown): PitchGridSnapshot {
+  const intent = resolvePitchGridIntent(value);
+  const points: PitchGridPoint[] = [];
+  for (const key of intent.onPoints) {
+    const point = pitchGridPointFromKey(key);
+    if (point !== null) {
+      points.push(point);
+    }
+  }
+  return { dimension: intent.dimension, points };
+}
+
+/**
+ * 共有値への純粋な切替遷移。
+ *
+ * `useInstanceState` の関数型更新へ渡す。前提が正規化されていない場合も
+ * 読み替えてから遷移し、同時操作の取りこぼし（後に届いた書き込みが残る）は
+ * 許容する。発音の有無の判断（空集合の無発音など）は反映側が結果に従う。
+ *
+ * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
+ * @param point - 操作した格子点。範囲内であること。
+ * @returns 切替後の演奏意図。
+ * @throws `Error` — 格子外の座標の場合。共有値は変えない。
+ */
+export function togglePitchGridIntent(
+  prev: PitchGridIntent,
+  point: PitchGridPoint,
+): PitchGridIntent {
+  if (!isInPitchGrid(point)) {
+    throw new Error(`格子外の座標である: (${String(point.x)}, ${String(point.y)})`);
+  }
+  const base = resolvePitchGridIntent(prev);
+  const key = pitchGridKey(point);
+  const next = base.onPoints.includes(key)
+    ? base.onPoints.filter((entry) => entry !== key)
+    : [...base.onPoints, key];
+  return { dimension: base.dimension, onPoints: normalizePitchGridKeys(next) };
+}
+
+/**
+ * 共有値への純粋な八方向移動遷移。
+ *
+ * `useInstanceState` の関数型更新へ渡す。移動先を先に判定し、一つでも
+ * 格子外へ出る場合と空集合の場合は遷移前の値をそのまま返し、
+ * 共有値を実質的に変えない。重なった座標を固定点として特別扱いしない。
+ *
+ * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
+ * @param dx - 横方向の移動量。`-1…1` の整数。
+ * @param dy - 縦方向の移動量。`-1…1` の整数。両方が0ではならない。
+ * @returns 移動後の演奏意図。適用できない場合は遷移前の値そのもの。
+ * @throws `RangeError` — 移動量が八方向のいずれでもない場合。共有値は変えない。
+ */
+export function movePitchGridIntent(
+  prev: PitchGridIntent,
+  dx: number,
+  dy: number,
+): PitchGridIntent {
+  const base = resolvePitchGridIntent(prev);
+  // 正規化済みの鍵は読み替えが必ず成功する。不正な共有値は
+  // `resolvePitchGridIntent` が先に落としており、ここに残らない。
+  const points: PitchGridPoint[] = [];
+  for (const key of base.onPoints) {
+    const point = pitchGridPointFromKey(key);
+    if (point !== null) {
+      points.push(point);
+    }
+  }
+  const shifted = shiftPitchGridPoints(points, dx, dy);
+  if (shifted === null) {
+    return prev;
+  }
   return {
-    getSnapshot(): PitchGridSnapshot {
-      return snapshot();
-    },
-    toggle(point: PitchGridPoint): PitchGridSnapshot {
-      if (!isInPitchGrid(point)) {
-        throw new Error(`格子外の座標である: (${String(point.x)}, ${String(point.y)})`);
-      }
-      const key = pitchGridKey(point);
-      if (onPoints.has(key)) {
-        onPoints.delete(key);
-      } else {
-        onPoints.set(key, { x: point.x, y: point.y });
-      }
-      return snapshot();
-    },
-    move(dx: number, dy: number): { readonly applied: boolean; readonly snapshot: PitchGridSnapshot } {
-      const shifted = shiftPitchGridPoints([...onPoints.values()], dx, dy);
-      if (shifted === null) {
-        return { applied: false, snapshot: snapshot() };
-      }
-      onPoints.clear();
-      for (const point of shifted) {
-        onPoints.set(pitchGridKey(point), point);
-      }
-      return { applied: true, snapshot: snapshot() };
-    },
-    selectDimension(
-      next: PitchGridDimension,
-    ): { readonly changed: boolean; readonly snapshot: PitchGridSnapshot } {
-      if (!isPitchGridDimension(next)) {
-        throw new RangeError(`縦軸の次元は3・4・5のいずれかであること: ${String(next)}`);
-      }
-      if (next === dimension) {
-        return { changed: false, snapshot: snapshot() };
-      }
-      dimension = next;
-      return { changed: true, snapshot: snapshot() };
-    },
+    dimension: base.dimension,
+    onPoints: normalizePitchGridKeys(shifted.map(pitchGridKey)),
   };
+}
+
+/**
+ * 共有値への純粋な次元選択遷移。
+ *
+ * `useInstanceState` の関数型更新へ渡す。切替ではオン点列を保ち、
+ * 選択次元だけを更新する。全員の選択次元を変える一括操作であり、
+ * 座標ごとの所有は持たない。同じ次元の選び直しは遷移前の値をそのまま返す。
+ *
+ * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
+ * @param dimension - 選択次元。
+ * @returns 切替後の演奏意図。同じ次元の場合は遷移前の値そのもの。
+ * @throws `RangeError` — 選択次元でない場合。共有値は変えない。
+ */
+export function selectPitchGridDimensionIntent(
+  prev: PitchGridIntent,
+  dimension: PitchGridDimension,
+): PitchGridIntent {
+  if (!isPitchGridDimension(dimension)) {
+    throw new RangeError(`縦軸の次元は3・4・5のいずれかであること: ${String(dimension)}`);
+  }
+  const base = resolvePitchGridIntent(prev);
+  if (base.dimension === dimension) {
+    return prev;
+  }
+  return { dimension, onPoints: base.onPoints };
 }

@@ -1,20 +1,27 @@
 /**
- * 格子操作の単一制御器の配線検査。
+ * 共有快照のローカル音声への反映の配線検査。
  *
  * ブラウザの音声文脈を使わず、演奏口の代替物で次を確かめる。
- * オン・オフと移動の集合反映、空集合と端での無反映、次元切替の
+ * オン・オフと移動の集合反映、空集合での無生成、次元切替の
  * 集合保持と新次元での鳴らし直し、空集合の切替での無生成、
- * 切替失敗時の非巻き戻し、破棄後の無受付を判定対象とする。
+ * 切替失敗後の再反映での回復、破棄後の無受付を判定対象とする。
  * 呼び出し記録だけでなく周波数と鍵の対応まで照合し、
  * 呼び出し回数だけを合格証拠にしない。具体値はこの検査に置く。
  */
 
 import { describe, expect, it } from 'vitest';
 import {
-  createPitchGridController,
-  type PitchGridControllerSnapshot,
+  createPitchGridSoundReflector,
+  type PitchGridSoundSnapshot,
 } from './pitchGridController';
-import { assignPitchGridFrequencies } from './pitchGrid';
+import {
+  assignPitchGridFrequencies,
+  movePitchGridIntent,
+  pitchGridSnapshotFromIntent,
+  selectPitchGridDimensionIntent,
+  togglePitchGridIntent,
+  PITCH_GRID_INITIAL_INTENT,
+} from './pitchGrid';
 import type {
   PitchGridSound,
   PitchGridSoundingVoice,
@@ -35,7 +42,7 @@ class FakePitchGridSound implements PitchGridSound {
 
   voiceCount = 0;
 
-  /** 次の切替だけ再開失敗として扱う。再操作での回復を確かめるために使う。 */
+  /** 次の切替だけ再開失敗として扱う。再反映での回復を確かめるために使う。 */
   failNextSwitch = false;
 
   private disposed = false;
@@ -115,8 +122,8 @@ function flush(): Promise<void> {
   });
 }
 
-function createController(): {
-  controller: ReturnType<typeof createPitchGridController>;
+function createReflector(): {
+  reflector: ReturnType<typeof createPitchGridSoundReflector>;
   sound: FakePitchGridSound;
   notified: () => number;
   createdSounds: () => number;
@@ -124,7 +131,7 @@ function createController(): {
   const sound = new FakePitchGridSound();
   let created = 0;
   let notifyCalls = 0;
-  const controller = createPitchGridController({
+  const reflector = createPitchGridSoundReflector({
     createSound: () => {
       created += 1;
       return sound;
@@ -133,39 +140,58 @@ function createController(): {
       notifyCalls += 1;
     },
   });
-  return { controller, sound, notified: () => notifyCalls, createdSounds: () => created };
+  return { reflector, sound, notified: () => notifyCalls, createdSounds: () => created };
 }
 
-function expectSnapshot(
-  snapshot: PitchGridControllerSnapshot,
-  dimension: 3 | 4 | 5,
-  points: Array<{ x: number; y: number }>,
+function expectSoundSnapshot(
+  snapshot: PitchGridSoundSnapshot,
+  voiceCount: number,
+  soundingVoices: readonly PitchGridSoundingVoice[],
 ): void {
-  expect(snapshot.dimension).toBe(dimension);
-  expect(snapshot.points).toEqual(points);
+  expect(snapshot.voiceCount).toBe(voiceCount);
+  expect(snapshot.soundingVoices).toEqual(soundingVoices);
 }
 
-describe('格子操作の単一制御器', () => {
-  it('点のオン・オフを声の集合へ反映する', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
+describe('共有快照のローカル音声への反映', () => {
+  it('点のオンを声の集合へ反映する', () => {
+    const { reflector, sound } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
     expect(sound.voiceCalls).toHaveLength(1);
     // 配置関数の結果をそのまま全声仕様として渡すこと。
     expect(sound.voiceCalls[0]).toEqual(assignPitchGridFrequencies([{ x: 0, y: 0 }], 3));
-    expectSnapshot(controller.getSnapshot(), 3, [{ x: 0, y: 0 }]);
-    controller.toggle({ x: 0, y: 0 });
+    expectSoundSnapshot(reflector.getSnapshot(), 1, []);
+  });
+
+  it('点のオフを声の集合へ反映する', () => {
+    const { reflector, sound } = createReflector();
+    const turnedOn = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(turnedOn));
+    const turnedOff = togglePitchGridIntent(turnedOn, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(turnedOff));
     expect(sound.voiceCalls).toHaveLength(2);
     expect(sound.voiceCalls[1]).toEqual([]);
-    expectSnapshot(controller.getSnapshot(), 3, []);
+    expectSoundSnapshot(reflector.getSnapshot(), 0, []);
+  });
+
+  it('遠隔の共有快照を自端末の音へ反映する', () => {
+    // 他端末が書いた意図値をそのまま受け取った想定で、共有値から
+    // 読み替えた快照を反映し、自端末の音へ届けること。
+    const { reflector, sound } = createReflector();
+    const remoteIntent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 1, y: 0 });
+    const received: unknown = JSON.parse(JSON.stringify(remoteIntent));
+    reflector.reflect(pitchGridSnapshotFromIntent(received));
+    expect(sound.voiceCalls).toEqual([assignPitchGridFrequencies([{ x: 1, y: 0 }], 3)]);
   });
 
   it('移動は差分として一括反映する', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    controller.toggle({ x: 1, y: 0 });
+    const { reflector, sound } = createReflector();
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
     const callsBefore = sound.voiceCalls.length;
-    const applied = controller.move(1, 1);
-    expect(applied).toBe(true);
+    const moved = movePitchGridIntent(intent, 1, 1);
+    reflector.reflect(pitchGridSnapshotFromIntent(moved));
     // 移動後の集合を一度だけ反映すること。
     expect(sound.voiceCalls).toHaveLength(callsBefore + 1);
     expect(sound.voiceCalls[callsBefore]).toEqual(
@@ -177,35 +203,25 @@ describe('格子操作の単一制御器', () => {
         3,
       ),
     );
-    expectSnapshot(controller.getSnapshot(), 3, [
-      { x: 1, y: 1 },
-      { x: 2, y: 1 },
-    ]);
   });
 
-  it('空集合の移動は音声へ触れない', () => {
-    const { controller, sound } = createController();
-    const applied = controller.move(1, 0);
-    expect(applied).toBe(false);
+  it('空集合の反映では文脈を作らない', () => {
+    const { reflector, sound, createdSounds } = createReflector();
+    reflector.reflect(pitchGridSnapshotFromIntent(PITCH_GRID_INITIAL_INTENT));
+    expect(createdSounds()).toBe(0);
     expect(sound.voiceCalls).toHaveLength(0);
-  });
-
-  it('端での拒否は音声へ触れず集合を保つ', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 2, y: 0 });
-    const callsBefore = sound.voiceCalls.length;
-    const applied = controller.move(1, 0);
-    expect(applied).toBe(false);
-    expect(sound.voiceCalls).toHaveLength(callsBefore);
-    expectSnapshot(controller.getSnapshot(), 3, [{ x: 2, y: 0 }]);
+    expect(sound.switchCalls).toHaveLength(0);
+    expectSoundSnapshot(reflector.getSnapshot(), 0, []);
   });
 
   it('次元切替はオン集合を保ち新次元で鳴らし直す', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    controller.toggle({ x: 1, y: 0 });
+    const { reflector, sound } = createReflector();
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
     const voiceCallsBefore = sound.voiceCalls.length;
-    controller.selectDimension(4);
+    const switched = selectPitchGridDimensionIntent(intent, 4);
+    reflector.reflect(pitchGridSnapshotFromIntent(switched));
     // 保持した全座標を新次元の周波数で鳴らし直すこと。旧音の停止は切替境界が担い、
     // 通常の停止と差分反映の重ね呼び出しはしないこと。
     expect(sound.switchCalls).toHaveLength(1);
@@ -220,35 +236,54 @@ describe('格子操作の単一制御器', () => {
     );
     expect(sound.stopAllCalls).toBe(0);
     expect(sound.voiceCalls).toHaveLength(voiceCallsBefore);
-    expectSnapshot(controller.getSnapshot(), 4, [
-      { x: 0, y: 0 },
-      { x: 1, y: 0 },
-    ]);
   });
 
   it('空集合の切替では文脈を作らず発音もしない', () => {
-    const { controller, sound, createdSounds } = createController();
-    controller.selectDimension(4);
+    const { reflector, sound, createdSounds } = createReflector();
+    const switched = selectPitchGridDimensionIntent(PITCH_GRID_INITIAL_INTENT, 4);
+    reflector.reflect(pitchGridSnapshotFromIntent(switched));
     expect(createdSounds()).toBe(0);
     expect(sound.switchCalls).toHaveLength(0);
     expect(sound.voiceCalls).toHaveLength(0);
     expect(sound.stopAllCalls).toBe(0);
-    // 次元の更新だけは保つこと。
-    expectSnapshot(controller.getSnapshot(), 4, []);
   });
 
-  it('切替の再開失敗でも集合と新次元を保ち再操作で鳴らし直せる', async () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
+  it('同じ次元の再反映は切替へ寄せない', () => {
+    const { reflector, sound } = createReflector();
+    const turnedOn = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(turnedOn));
+    const added = togglePitchGridIntent(turnedOn, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(added));
+    expect(sound.voiceCalls).toHaveLength(2);
+    expect(sound.switchCalls).toHaveLength(0);
+  });
+
+  it('同値の再反映は抑止せず音声側へ渡す', () => {
+    // 同値の抑止は共有側に設けず、音声側の継続分岐に寄せる。
+    // 同じ快照の反映は通常反映として渡し、切替には寄せないこと。
+    const { reflector, sound } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    const snapshot = pitchGridSnapshotFromIntent(intent);
+    reflector.reflect(snapshot);
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    expect(sound.voiceCalls).toHaveLength(2);
+    expect(sound.switchCalls).toHaveLength(0);
+  });
+
+  it('切替の再開失敗後も再反映で鳴らし直せる', async () => {
+    const { reflector, sound } = createReflector();
+    const turnedOn = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(turnedOn));
     sound.failNextSwitch = true;
-    controller.selectDimension(4);
+    const switched = selectPitchGridDimensionIntent(turnedOn, 4);
+    reflector.reflect(pitchGridSnapshotFromIntent(switched));
     await flush();
-    // 巻き戻さず、声だけが外れた状態になること。
-    expectSnapshot(controller.getSnapshot(), 4, [{ x: 0, y: 0 }]);
+    // 声だけが外れた状態になること。
     expect(sound.voiceCount).toBe(0);
-    // 次の操作で鳴らし直せること。
+    // 次の反映で鳴らし直せること。次元は追跡済みのため通常反映に寄せる。
     const voiceCallsBefore = sound.voiceCalls.length;
-    controller.toggle({ x: 1, y: 0 });
+    const added = togglePitchGridIntent(switched, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(added));
     expect(sound.voiceCalls).toHaveLength(voiceCallsBefore + 1);
     expect(sound.voiceCalls[voiceCallsBefore]).toEqual(
       assignPitchGridFrequencies(
@@ -259,42 +294,20 @@ describe('格子操作の単一制御器', () => {
         4,
       ),
     );
-    expectSnapshot(controller.getSnapshot(), 4, [
-      { x: 0, y: 0 },
-      { x: 1, y: 0 },
-    ]);
+    expect(sound.switchCalls).toHaveLength(1);
   });
 
-  it('同じ次元の選び直しは停止も反映もしない', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    const callsBefore = sound.voiceCalls.length;
-    controller.selectDimension(3);
-    expect(sound.stopAllCalls).toBe(0);
-    expect(sound.switchCalls).toHaveLength(0);
-    expect(sound.voiceCalls).toHaveLength(callsBefore);
-    expectSnapshot(controller.getSnapshot(), 3, [{ x: 0, y: 0 }]);
-  });
-
-  it('格子外の操作は文脈を作らずに拒む', () => {
-    const { controller, sound } = createController();
-    expect(() => controller.toggle({ x: 3, y: 0 })).toThrow();
-    expect(sound.voiceCalls).toHaveLength(0);
-    expect(() => controller.move(0, 0)).toThrow(RangeError);
-    expect(() => controller.selectDimension(2 as never)).toThrow(RangeError);
-    expect(sound.stopAllCalls).toBe(0);
-  });
-
-  it('破棄後は操作を受け付けず文脈を一度だけ閉じる', async () => {
-    const { controller, sound, notified } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    await controller.dispose();
-    await controller.dispose();
+  it('破棄後は反映を受け付けず文脈を一度だけ閉じる', async () => {
+    const { reflector, sound, notified } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    await flush();
+    await reflector.dispose();
+    await reflector.dispose();
     expect(sound.disposeCalls).toBe(1);
     const callsBefore = sound.voiceCalls.length;
-    controller.toggle({ x: 1, y: 0 });
-    expect(controller.move(1, 0)).toBe(false);
-    controller.selectDimension(4);
+    const added = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(added));
     expect(sound.voiceCalls).toHaveLength(callsBefore);
     expect(sound.stopAllCalls).toBe(0);
     expect(notified()).toBeGreaterThan(0);
@@ -302,58 +315,58 @@ describe('格子操作の単一制御器', () => {
 
   it('起動前に破棄した場合は文脈を作らない', async () => {
     let created = 0;
-    const controller = createPitchGridController({
+    const reflector = createPitchGridSoundReflector({
       createSound: () => {
         created += 1;
         return new FakePitchGridSound();
       },
     });
-    await controller.dispose();
+    await reflector.dispose();
     expect(created).toBe(0);
   });
 });
 
-describe('格子操作の単一制御器の表示用保持中一覧', () => {
+describe('反射器の表示用保持中一覧', () => {
   it('快照の表示用一覧は音声側の保持一覧を反映する', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
+    const { reflector, sound } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
     // 音声側の再開成立を模し、表示用の保持中一覧だけを差し替えること。
     const [assigned] = assignPitchGridFrequencies([{ x: 0, y: 0 }], 3);
     const frequency = assigned.frequency;
     sound.setSoundingForTest([{ key: '0,0', frequency }]);
-    expect(controller.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
+    expect(reflector.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
   });
 
   it('選択意図と表示一覧が食い違っても混同しない', () => {
-    const { controller, sound } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    controller.toggle({ x: 1, y: 0 });
-    // 再開未成立を模し、表示一覧は空のままにすること。選択意図の座標集合は
-    // 保ち、表示一覧の再計算や声数の推定で埋めないこと。
-    expect(controller.getSnapshot().points).toEqual([
-      { x: 0, y: 0 },
-      { x: 1, y: 0 },
-    ]);
-    expect(controller.getSnapshot().soundingVoices).toEqual([]);
+    const { reflector, sound } = createReflector();
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    // 再開未成立を模し、表示一覧は空のままにすること。表示一覧の
+    // 再計算や声数の推定で埋めないこと。
+    expect(reflector.getSnapshot().soundingVoices).toEqual([]);
     expect(sound.voiceCount).toBe(2);
   });
 
   it('音声側の内容変化通知を既存の通知へ届ける', () => {
-    const { controller, sound, notified } = createController();
-    controller.toggle({ x: 0, y: 0 });
+    const { reflector, sound, notified } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
     const callsBefore = notified();
     const [assigned] = assignPitchGridFrequencies([{ x: 0, y: 0 }], 3);
     const frequency = assigned.frequency;
     sound.setSoundingForTest([{ key: '0,0', frequency }]);
-    // 音声側の購読が制御器の既存通知へ転送され、快照が新しい一覧を返すこと。
+    // 音声側の購読が反射器の既存通知へ転送され、快照が新しい一覧を返すこと。
     expect(notified()).toBeGreaterThan(callsBefore);
-    expect(controller.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
+    expect(reflector.getSnapshot().soundingVoices).toEqual([{ key: '0,0', frequency }]);
   });
 
   it('破棄後は音声側の内容変化通知を届けない', async () => {
-    const { controller, sound, notified } = createController();
-    controller.toggle({ x: 0, y: 0 });
-    await controller.dispose();
+    const { reflector, sound, notified } = createReflector();
+    const intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    await reflector.dispose();
     const callsBefore = notified();
     sound.setSoundingForTest([{ key: '0,0', frequency: 220 }]);
     expect(notified()).toBe(callsBefore);
