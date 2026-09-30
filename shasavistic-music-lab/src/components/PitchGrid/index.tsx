@@ -2,6 +2,7 @@ import { Interactable, useInstanceState } from '@xrift/world-components';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   allPitchGridPoints,
+  clearFunctionalRootIntent,
   isInPitchGrid,
   isPitchGridDimension,
   movePitchGridIntent,
@@ -10,8 +11,10 @@ import {
   PITCH_GRID_VERTICAL_PRIMES,
   pitchGridKey,
   pitchGridSnapshotFromIntent,
+  resolvePitchGridIntent,
   selectPitchGridDimensionIntent,
   shiftPitchGridPoints,
+  specifyFunctionalRootIntent,
   togglePitchGridIntent,
   type PitchGridDimension,
   type PitchGridIntent,
@@ -22,6 +25,11 @@ import {
   type PitchGridSoundReflector,
   type PitchGridSoundSnapshot,
 } from '../../audio/pitchGridController';
+import {
+  CHORD_DIAGRAM_POSITION,
+  CHORD_DIAGRAM_SIZE,
+  ChordDiagramPanel,
+} from './ChordDiagramPanel';
 import { TextPlate } from './plates';
 import { SOUNDING_PIANO_POSITION, SOUNDING_PIANO_SIZE, SoundingPiano } from './SoundingPiano';
 
@@ -99,6 +107,43 @@ const DIM_BUTTON_COLOR = '#78909c';
 /** 選択できる縦軸の次元。左から3・4・5次元の順に並べる。 */
 const DIMENSIONS: readonly PitchGridDimension[] = [3, 4, 5];
 
+/**
+ * 機能根の指定モード切替釦の中心（部品内座標）。
+ * 次元選択列の右側に縦一列で置く初期候補である。部品形状は未確定であり、
+ * XR実画面の確認で決めること。移動パッド・次元釦・和音図パネルとは重ねない。
+ */
+const ROOT_MODE_CENTER_X = 3.0;
+
+/** 指定モード切替釦の中心高さ（部品内座標）。 */
+const ROOT_MODE_CENTER_Y = 0.95;
+
+/**
+ * 機能根の解除釦の中心（部品内座標）。
+ * 切替釦の下に縦一列で置く初期候補である。部品形状は未確定であり、
+ * XR実画面の確認で決めること。
+ */
+const ROOT_CLEAR_CENTER_Y = 0.45;
+
+/**
+ * 機能根の状態銘板の中心（部品内座標）。
+ * 切替釦の上に置く初期候補である。指定モードと確定した根の有無を
+ * 文言で示し、色だけに頼らない。
+ */
+const ROOT_STATUS_CENTER_Y = 1.5;
+
+/**
+ * 機能根の操作釦の一辺の長さ。
+ * 次元選択釦と同じ寸法の初期候補である。部品形状は未確定であり、
+ * XR実画面の確認で決めること。
+ */
+const ROOT_BUTTON_SIZE = 0.38;
+
+/** 機能根の操作釦の色。格子 Cube とは別の操作対象であることの色相の合図に使う。 */
+const ROOT_BUTTON_COLOR = '#ab47bc';
+
+/** 機能根の状態銘板の大きさ（幅・高さ）。 */
+const ROOT_STATUS_SIZE: readonly [number, number] = [0.9, 0.42];
+
 /** 八方向の移動操作の定義。右・上を正とする。 */
 const MOVE_DIRECTIONS: readonly {
   readonly dx: number;
@@ -140,6 +185,12 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
   );
   // 共有値は境界で確かめてから表示と反映に使う。
   const snapshot = useMemo(() => pitchGridSnapshotFromIntent(intent), [intent]);
+  // 確定した機能根の座標鍵だけを共有意図から読む。指定モード
+  // （選択中であること）は各端末の操作状態とし、共有しない。
+  const resolvedIntent = useMemo(() => resolvePitchGridIntent(intent), [intent]);
+  const functionalRootKey = resolvedIntent.functionalRootKey;
+  // 機能根の指定モード。各端末の操作状態であり、共有意図には載せない。
+  const [specifyMode, setSpecifyMode] = useState(false);
   // 実際に鳴った声の表示は各端末ローカルに保つ。意図の共有と発音成立は別物とする。
   const [soundSnapshot, setSoundSnapshot] = useState<PitchGridSoundSnapshot>(() => ({
     voiceCount: 0,
@@ -210,6 +261,40 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
     [setIntent, snapshot],
   );
 
+  const handleSpecifyRoot = useCallback(
+    (point: PitchGridPoint) => {
+      // オンでない点は機能根に指定できないため、共有へ送らず無視する。
+      // 共有値の変化との競合は取りこぼしとして許容する。
+      const key = pitchGridKey(point);
+      if (!snapshot.points.some((entry) => pitchGridKey(entry) === key)) {
+        return;
+      }
+      setIntent((prev) => specifyFunctionalRootIntent(prev, point));
+    },
+    [setIntent, snapshot],
+  );
+
+  const handleCubeTap = useCallback(
+    (point: PitchGridPoint) => {
+      // 指定モード中だけ立方体タップを機能根の指定に使い、通常の
+      // オン・オフ操作と競合させない。既存の操作は変えない。
+      if (specifyMode) {
+        handleSpecifyRoot(point);
+        return;
+      }
+      handleToggle(point);
+    },
+    [specifyMode, handleSpecifyRoot, handleToggle],
+  );
+
+  const handleClearRoot = useCallback(() => {
+    setIntent((prev) => clearFunctionalRootIntent(prev));
+  }, [setIntent]);
+
+  const handleToggleSpecifyMode = useCallback(() => {
+    setSpecifyMode((prev) => !prev);
+  }, []);
+
   const onKeys = new Set(snapshot.points.map((point) => pitchGridKey(point)));
   const verticalPrime = PITCH_GRID_VERTICAL_PRIMES[snapshot.dimension];
 
@@ -225,9 +310,11 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
       />
 
       {/* ========== 格子15点（横5×縦3）。各点のオン・オフを切り替える ========== */}
+      {/* 指定モード中だけ立方体タップを機能根の指定に使う。 */}
       {allPitchGridPoints().map((point) => {
         const key = pitchGridKey(point);
         const on = onKeys.has(key);
+        const isRoot = functionalRootKey === key;
         const label = pointLabel(point);
         return (
           <group
@@ -238,9 +325,11 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
               id={`pitch-grid-${point.x}-${point.y}`}
               type="button"
               onInteract={() => {
-                handleToggle(point);
+                handleCubeTap(point);
               }}
-              interactionText={on ? `止める ${label}` : `鳴らす ${label}`}
+              interactionText={
+                specifyMode ? (on ? `根に指定 ${label}` : `指定不可 ${label}`) : on ? `止める ${label}` : `鳴らす ${label}`
+              }
             >
               <mesh position={[0, 0, 0]} castShadow>
                 <boxGeometry args={[GRID_CUBE_SIZE, GRID_CUBE_SIZE, GRID_CUBE_SIZE]} />
@@ -248,11 +337,13 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
               </mesh>
             </Interactable>
             {/* 状態は銘板の文言と明暗でも示し、色だけに頼らない。オンは選択意図であり発音中の断定には使わない。 */}
+            {/* 機能根の点は枠と文言で示す。指定モードの操作状態は銘板の対象外とする。 */}
             <TextPlate
-              lines={[label, on ? 'ON' : 'OFF']}
+              lines={[label, isRoot ? '根 ON' : on ? 'ON' : 'OFF']}
               size={GRID_LABEL_SIZE}
               position={[0, GRID_LABEL_HEIGHT, 0]}
               light={on}
+              framed={isRoot}
             />
           </group>
         );
@@ -334,6 +425,72 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
           </group>
         );
       })}
+      {/* ========== 和音図の線構造プレビュー。共有意図の非操作面 ========== */}
+      {/* 座標・寸法は格子右上の初期候補であり、実画面の確認で決める。 */}
+      {/* 鳴り中音高パネル・移動パッド・次元釦・格子とは重ねない。 */}
+      <ChordDiagramPanel
+        dimension={snapshot.dimension}
+        points={snapshot.points}
+        functionalRootKey={functionalRootKey}
+        position={CHORD_DIAGRAM_POSITION}
+        size={CHORD_DIAGRAM_SIZE}
+      />
+
+      {/* ========== 機能根の指定モード切替・解除。共有するのは確定した根だけ ========== */}
+      {/* 部品形状は未確定であり、妥当な初期形として次元選択の流儀の釦2個と状態銘板を置く。 */}
+      {/* 指定モードは端末ごとの操作状態とし、共有意図には載せない。 */}
+      <group position={[ROOT_MODE_CENTER_X, ROOT_MODE_CENTER_Y, 0]}>
+        <Interactable
+          id="pitch-grid-root-mode"
+          type="button"
+          onInteract={() => {
+            handleToggleSpecifyMode();
+          }}
+          interactionText={specifyMode ? '根指定モードを終える' : '根指定モードに入る'}
+        >
+          <mesh position={[0, 0, 0]} castShadow>
+            <boxGeometry args={[ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE]} />
+            <meshStandardMaterial color={ROOT_BUTTON_COLOR} />
+          </mesh>
+        </Interactable>
+        <TextPlate
+          lines={specifyMode ? ['根指定', '指定中'] : ['根指定', 'OFF']}
+          size={[ROOT_BUTTON_SIZE + 0.06, ROOT_BUTTON_SIZE + 0.06]}
+          position={[0, 0, ROOT_BUTTON_SIZE / 2 + 0.01]}
+          light={specifyMode}
+          framed={specifyMode}
+        />
+      </group>
+      <group position={[ROOT_MODE_CENTER_X, ROOT_CLEAR_CENTER_Y, 0]}>
+        <Interactable
+          id="pitch-grid-root-clear"
+          type="button"
+          onInteract={() => {
+            handleClearRoot();
+          }}
+          interactionText={functionalRootKey === null ? '根未指定' : `根を解除 ${functionalRootKey}`}
+        >
+          <mesh position={[0, 0, 0]} castShadow>
+            <boxGeometry args={[ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE]} />
+            <meshStandardMaterial color={ROOT_BUTTON_COLOR} />
+          </mesh>
+        </Interactable>
+        <TextPlate
+          lines={['根解除', functionalRootKey === null ? '根なし' : '解除する']}
+          size={[ROOT_BUTTON_SIZE + 0.06, ROOT_BUTTON_SIZE + 0.06]}
+          position={[0, 0, ROOT_BUTTON_SIZE / 2 + 0.01]}
+        />
+      </group>
+      {/* 指定モードと確定した根の有無を文言で示し、色だけに頼らない。 */}
+      <TextPlate
+        lines={[
+          specifyMode ? '根指定中' : '根指定OFF',
+          functionalRootKey === null ? '根未指定' : `根 ${functionalRootKey}`,
+        ]}
+        size={ROOT_STATUS_SIZE}
+        position={[ROOT_MODE_CENTER_X, ROOT_STATUS_CENTER_Y, 0]}
+        light={specifyMode}
+      />
     </group>
   );
 }

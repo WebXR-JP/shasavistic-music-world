@@ -4,7 +4,8 @@
  * 音声文脈を使わず、純粋計算と状態遷移だけを確かめる。15点の一意性、
  * 論理比と発音用配置の区別、候補の音域収容と論理比の保存、集合単位の
  * 配置の厳密性と決定性、八方向の平行移動、重なり、端での全体拒否、
- * 空集合の無適用、次元切替の集合保持を判定対象とする。
+ * 空集合の無適用、次元切替の集合保持、機能根の指定・解除・点オフ時解除・
+ * 集合移動時追随・次元切替時保持を判定対象とする。
  * 具体値はこの検査に置く。音声信号の採取は対象外とする。
  */
 
@@ -16,6 +17,7 @@ import {
   PITCH_GRID_SOUND_LOW_HZ,
   allPitchGridPoints,
   assignPitchGridFrequencies,
+  clearFunctionalRootIntent,
   isInPitchGrid,
   logicalRatioFor,
   movePitchGridIntent,
@@ -27,6 +29,7 @@ import {
   selectPitchGridDimensionIntent,
   shiftPitchGridPoints,
   soundingCandidatesFor,
+  specifyFunctionalRootIntent,
   togglePitchGridIntent,
   verticalPrimeFor,
   type PitchGridDimension,
@@ -469,9 +472,9 @@ describe('集合単位の発音配置', () => {
 describe('共有意図への純粋な遷移', () => {
   it('点のオン・オフを切り替える', () => {
     const turnedOn = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
-    expect(turnedOn).toEqual({ dimension: 3, onPoints: ['0,0'] });
+    expect(turnedOn).toEqual({ dimension: 3, onPoints: ['0,0'], functionalRootKey: null });
     const turnedOff = togglePitchGridIntent(turnedOn, { x: 0, y: 0 });
-    expect(turnedOff).toEqual({ dimension: 3, onPoints: [] });
+    expect(turnedOff).toEqual({ dimension: 3, onPoints: [], functionalRootKey: null });
   });
 
   it('切替は固定座標順に正規化する', () => {
@@ -488,9 +491,13 @@ describe('共有意図への純粋な遷移', () => {
   });
 
   it('切替は重複を作らない', () => {
-    const duplicated: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '0,0'] };
+    const duplicated: PitchGridIntent = {
+      dimension: 3,
+      onPoints: ['0,0', '0,0'],
+      functionalRootKey: null,
+    };
     const next = togglePitchGridIntent(duplicated, { x: 1, y: 0 });
-    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'] });
+    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'], functionalRootKey: null });
   });
 
   it('八方向の平行移動で集合全体がずれる', () => {
@@ -505,30 +512,40 @@ describe('共有意図への純粋な遷移', () => {
       [-1, -1],
     ];
     for (const [dx, dy] of directions) {
-      const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+      const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'], functionalRootKey: null };
       expect(movePitchGridIntent(intent, dx, dy)).toEqual({
         dimension: 3,
         onPoints: [`${dx},${dy}`],
+        functionalRootKey: null,
       });
     }
   });
 
   it('移動で重なった点を固定点として残さない', () => {
     // 移動前の集合をそのまま平行移動したものになり、重なりを特別扱いしないこと。
-    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '1,0'] };
+    const intent: PitchGridIntent = {
+      dimension: 3,
+      onPoints: ['0,0', '1,0'],
+      functionalRootKey: null,
+    };
     expect(movePitchGridIntent(intent, 1, 0)).toEqual({
       dimension: 3,
       onPoints: ['1,0', '2,0'],
+      functionalRootKey: null,
     });
   });
 
   it('端での移動は集合全体について行わない', () => {
-    const intent: PitchGridIntent = { dimension: 3, onPoints: ['2,0'] };
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['2,0'], functionalRootKey: null };
     const result = movePitchGridIntent(intent, 1, 0);
     // 集合は変わらず、折り返しもしないこと。
     expect(result.onPoints).toEqual(['2,0']);
     // 一つでも外へ出る場合は全体を拒否すること。
-    const crowded: PitchGridIntent = { dimension: 3, onPoints: ['2,1', '0,0'] };
+    const crowded: PitchGridIntent = {
+      dimension: 3,
+      onPoints: ['2,1', '0,0'],
+      functionalRootKey: null,
+    };
     expect(movePitchGridIntent(crowded, 0, 1).onPoints).toEqual(['2,1', '0,0']);
   });
 
@@ -537,10 +554,15 @@ describe('共有意図への純粋な遷移', () => {
   });
 
   it('次元切替でオン集合を保持して次元だけを変える', () => {
-    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0', '1,-1'] };
+    const intent: PitchGridIntent = {
+      dimension: 3,
+      onPoints: ['0,0', '1,-1'],
+      functionalRootKey: null,
+    };
     expect(selectPitchGridDimensionIntent(intent, 4)).toEqual({
       dimension: 4,
       onPoints: ['0,0', '1,-1'],
+      functionalRootKey: null,
     });
   });
 
@@ -548,16 +570,17 @@ describe('共有意図への純粋な遷移', () => {
     expect(selectPitchGridDimensionIntent(PITCH_GRID_INITIAL_INTENT, 4)).toEqual({
       dimension: 4,
       onPoints: [],
+      functionalRootKey: null,
     });
   });
 
   it('同じ次元の選び直しは何もしない', () => {
-    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'], functionalRootKey: null };
     expect(selectPitchGridDimensionIntent(intent, 3)).toBe(intent);
   });
 
   it('不正な操作は共有値を変えずに拒む', () => {
-    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'] };
+    const intent: PitchGridIntent = { dimension: 3, onPoints: ['0,0'], functionalRootKey: null };
     expect(() => togglePitchGridIntent(intent, { x: 3, y: 0 })).toThrow();
     expect(() => movePitchGridIntent(intent, 0, 0)).toThrow(RangeError);
     expect(() => movePitchGridIntent(intent, 2, 0)).toThrow(RangeError);
@@ -568,7 +591,7 @@ describe('共有意図への純粋な遷移', () => {
     // 他端末の書き込みが型どおりでない場合も、遷移の前提として読み替えること。
     const broken = { dimension: 9, onPoints: ['0,0', '鍵でない', '3,0'] } as unknown as PitchGridIntent;
     const next = togglePitchGridIntent(broken, { x: 1, y: 0 });
-    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'] });
+    expect(next).toEqual({ dimension: 3, onPoints: ['0,0', '1,0'], functionalRootKey: null });
   });
 
   it('純粋な平行移動は格子外で空振りする', () => {
@@ -594,6 +617,148 @@ describe('共有意図への純粋な遷移', () => {
   });
 });
 
+describe('機能根の共有意図への遷移', () => {
+  it('オン点のいずれかを機能根に指定できる', () => {
+    // 指定が共有意図に載り、オン集合は変わらないこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    const specified = specifyFunctionalRootIntent(intent, { x: 1, y: 0 });
+    expect(specified).toEqual({
+      dimension: 3,
+      onPoints: ['0,0', '1,0'],
+      functionalRootKey: '1,0',
+    });
+  });
+
+  it('機能根を選び直せる', () => {
+    // 根の載せ替えであり、オン集合と次元は保つこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    const reselected = specifyFunctionalRootIntent(intent, { x: 1, y: 0 });
+    expect(reselected.functionalRootKey).toBe('1,0');
+    expect(reselected.onPoints).toEqual(['0,0', '1,0']);
+    expect(reselected.dimension).toBe(3);
+  });
+
+  it('同じ根の選び直しは何もしない', () => {
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    expect(specifyFunctionalRootIntent(intent, { x: 0, y: 0 })).toBe(intent);
+  });
+
+  it('機能根を解除できる', () => {
+    // 解除は根だけを未指定に戻し、オン集合は保つこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    const cleared = clearFunctionalRootIntent(intent);
+    expect(cleared).toEqual({ dimension: 3, onPoints: ['0,0'], functionalRootKey: null });
+    // 未指定の状態での解除は何もしないこと。
+    expect(clearFunctionalRootIntent(cleared)).toBe(cleared);
+  });
+
+  it('オンでない点の指定を拒む', () => {
+    // 範囲内でもオフの点は指定できず、共有値は変えないこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    expect(() => specifyFunctionalRootIntent(intent, { x: 1, y: 0 })).toThrow();
+    expect(intent.functionalRootKey).toBe('0,0');
+    // 格子外の座標も拒むこと。
+    expect(() => specifyFunctionalRootIntent(intent, { x: 3, y: 0 })).toThrow();
+    expect(intent.functionalRootKey).toBe('0,0');
+  });
+
+  it('対応点をオフにしたら機能根を解除する', () => {
+    // 根の点をオフにすると未指定になり、他の点は残ること。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    const turnedOff = togglePitchGridIntent(intent, { x: 0, y: 0 });
+    expect(turnedOff).toEqual({
+      dimension: 3,
+      onPoints: ['1,0'],
+      functionalRootKey: null,
+    });
+  });
+
+  it('根でない点の切替では機能根を保つ', () => {
+    // 根以外のオン・オフと、別の点のオンは根を変えないこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    const added = togglePitchGridIntent(intent, { x: 0, y: 1 });
+    expect(added.functionalRootKey).toBe('0,0');
+    const removedOther = togglePitchGridIntent(added, { x: 1, y: 0 });
+    expect(removedOther).toEqual({
+      dimension: 3,
+      onPoints: ['0,1', '0,0'],
+      functionalRootKey: '0,0',
+    });
+  });
+
+  it('集合移動で機能根が追随する', () => {
+    // 根の座標鍵も集合と同じだけ移動すること。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 0, y: 0 });
+    expect(movePitchGridIntent(intent, 1, 0)).toEqual({
+      dimension: 3,
+      onPoints: ['1,0', '2,0'],
+      functionalRootKey: '1,0',
+    });
+  });
+
+  it('端での移動不成立は機能根を保つ', () => {
+    // 一つでも外へ出る移動は集合全体で行わず、根も変わらないこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 2, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 0, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 2, y: 0 });
+    const result = movePitchGridIntent(intent, 1, 0);
+    expect(result).toBe(intent);
+    expect(result.functionalRootKey).toBe('2,0');
+  });
+
+  it('次元切替で機能根の座標鍵を保つ', () => {
+    // 保つのは座標と役割であり、周波数の不変性ではないこと。
+    let intent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 0, y: 0 });
+    intent = togglePitchGridIntent(intent, { x: 1, y: 0 });
+    intent = specifyFunctionalRootIntent(intent, { x: 1, y: 0 });
+    expect(selectPitchGridDimensionIntent(intent, 4)).toEqual({
+      dimension: 4,
+      onPoints: ['0,0', '1,0'],
+      functionalRootKey: '1,0',
+    });
+  });
+
+  it('不正な共有値の機能根は未指定に正規化する', () => {
+    // 共有機構から届く値は型どおりとは限らないため、境界で確かめること。
+    expect(PITCH_GRID_INITIAL_INTENT.functionalRootKey).toBe(null);
+    expect(resolvePitchGridIntent({ dimension: 3, onPoints: ['0,0'] })).toEqual({
+      dimension: 3,
+      onPoints: ['0,0'],
+      functionalRootKey: null,
+    });
+    // 鍵でない・格子外・集合外の根は未指定に倒すこと。
+    expect(
+      resolvePitchGridIntent({ dimension: 3, onPoints: ['0,0'], functionalRootKey: '鍵でない' }),
+    ).toEqual({ dimension: 3, onPoints: ['0,0'], functionalRootKey: null });
+    expect(
+      resolvePitchGridIntent({ dimension: 3, onPoints: ['0,0'], functionalRootKey: '3,0' }),
+    ).toEqual({ dimension: 3, onPoints: ['0,0'], functionalRootKey: null });
+    expect(
+      resolvePitchGridIntent({ dimension: 3, onPoints: ['0,0'], functionalRootKey: '1,0' }),
+    ).toEqual({ dimension: 3, onPoints: ['0,0'], functionalRootKey: null });
+    // 集合内の根は保つこと。
+    expect(
+      resolvePitchGridIntent({
+        dimension: 4,
+        onPoints: ['1,0', '0,1'],
+        functionalRootKey: '1,0',
+      }),
+    ).toEqual({ dimension: 4, onPoints: ['0,1', '1,0'], functionalRootKey: '1,0' });
+  });
+});
+
 describe('共有意図の読み替え', () => {
   it('座標鍵を格子点へ読み替える', () => {
     expect(pitchGridPointFromKey('0,0')).toEqual({ x: 0, y: 0 });
@@ -611,21 +776,27 @@ describe('共有意図の読み替え', () => {
   it('不正な共有値を正規化して読み替える', () => {
     // 共有機構から届く値は型どおりとは限らないため、境界で確かめること。
     expect(resolvePitchGridIntent(null)).toEqual(PITCH_GRID_INITIAL_INTENT);
-    expect(resolvePitchGridIntent({})).toEqual({ dimension: 3, onPoints: [] });
+    expect(resolvePitchGridIntent({})).toEqual({
+      dimension: 3,
+      onPoints: [],
+      functionalRootKey: null,
+    });
     expect(
       resolvePitchGridIntent({
         dimension: 4,
         onPoints: ['1,0', '0,1', '1,0', '9,9', '鍵でない', 5, null],
       }),
-    ).toEqual({ dimension: 4, onPoints: ['0,1', '1,0'] });
+    ).toEqual({ dimension: 4, onPoints: ['0,1', '1,0'], functionalRootKey: null });
     // 不正な次元は初期次元に倒し、配列でない点列は空とすること。
     expect(resolvePitchGridIntent({ dimension: 9, onPoints: ['0,0'] })).toEqual({
       dimension: 3,
       onPoints: ['0,0'],
+      functionalRootKey: null,
     });
     expect(resolvePitchGridIntent({ dimension: 4, onPoints: '0,0' })).toEqual({
       dimension: 4,
       onPoints: [],
+      functionalRootKey: null,
     });
   });
 
