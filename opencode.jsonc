@@ -7,10 +7,35 @@
   "model": "opencode-go/muse-spark-1.3-contributor",
   "agents": {
     "orchestrator": { "model": "opencode-go/deepseek-v4.1-flash#high" },
-    "advisor": { "model": "openai/gpt-6-sol#high" },
+    "advisor": { "model": "openai/gpt-6.1-sol#high" },
     "builder": { "model": "opencode-go/muse-spark-1.3-contributor#high" },
     "committer": { "model": "opencode-go/muse-spark-1.3-contributor#high" },
-    "design-reviewer": { "model": "opencode-go/muse-spark-1.3-contributor#xhigh" }
+    "design-reviewer": { "model": "opencode-go/muse-spark-1.3-contributor#xhigh" },
+    "explore": {
+      "model": "opencode/ling-3.0-flash-fin-free",
+      "permissions": [
+        {
+          "action": "execute",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "serena_find_*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "serena_get_*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "serena_initial_instructions",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ]
+    }
   },
   "permissions": [
     // gitは既定で拒否し、読み取り系だけ許可する。
