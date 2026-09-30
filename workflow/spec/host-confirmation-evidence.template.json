@@ -119,6 +119,30 @@
       "note": ""
     }
   },
+  "screenShare": {
+    "operations": [
+      {
+        "id": "",
+        "at": "",
+        "action": "start",
+        "stateBefore": "",
+        "stateAfter": "",
+        "note": ""
+      }
+    ],
+    "checks": {
+      "startStop": { "result": "", "operationIds": [], "note": "" },
+      "visibleToOthers": { "result": "", "operationIds": [], "note": "" },
+      "singleSurface": { "result": "", "operationIds": [], "note": "" },
+      "placementFitsWall": { "result": "", "operationIds": [], "note": "" },
+      "noOverlapWithTheoryPanel": { "result": "", "operationIds": [], "note": "" }
+    },
+    "requiresRoomJoin": "",
+    "requiresMic": "",
+    "aimedFrom": "",
+    "configNeeded": "",
+    "note": ""
+  },
   "hostAudio": {
     "permissionAndResume": "",
     "note": ""

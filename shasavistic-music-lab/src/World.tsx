@@ -1,4 +1,4 @@
-import { SpawnPoint } from '@xrift/world-components'
+import { ScreenShareDisplay, SpawnPoint } from '@xrift/world-components'
 import { RigidBody } from '@react-three/rapier'
 import { useRef } from 'react'
 import { Mesh } from 'three'
@@ -9,6 +9,12 @@ import {
   THEORY_INTRO_POSITION,
   THEORY_INTRO_SIZE,
 } from './components/PitchGrid/theoryPanel'
+import {
+  SCREEN_SHARE_ID,
+  SCREEN_SHARE_POSITION,
+  SCREEN_SHARE_ROTATION,
+  SCREEN_SHARE_WIDTH,
+} from './components/PitchGrid/screenSharePanel'
 import pitchGridIntro from './content/pitch-grid-intro.json'
 import { COLORS, WORLD_CONFIG } from './constants'
 
@@ -90,6 +96,17 @@ export const World: React.FC<WorldProps> = ({ position = [0, 0, 0], scale = 1 })
         intro={pitchGridIntro}
         position={THEORY_INTRO_POSITION}
         size={THEORY_INTRO_SIZE}
+      />
+
+      {/* ========== 画面共有の1枚パネル。格子と独立の共有面として中央奥へ置く ========== */}
+      {/* 格子（z=5）より小さい z に置き、正面を訪問者側の +z へ向ける。 */}
+      {/* 右側の理論説明パネルと投影上も重ならないよう x を中央に寄せる。 */}
+      {/* 開始・停止は部品標準のInteract操作を使い、独自実装しない。 */}
+      <ScreenShareDisplay
+        id={SCREEN_SHARE_ID}
+        position={[...SCREEN_SHARE_POSITION]}
+        rotation={[...SCREEN_SHARE_ROTATION]}
+        width={SCREEN_SHARE_WIDTH}
       />
     </group>
   )
