@@ -56,5 +56,6 @@ MVPの満たし方は子を参照する。MVPの正本は格子操作の `pitch-
 
 - workflow/design/shasavistic-music-lab/pitch-grid.md（MVPの正本。格子操作・音高・発音の満たし方）
 - workflow/design/shasavistic-music-lab/harmonic-synth.md（MVP対象外の調波シンセ探索の置き先）
+- workflow/design/shasavistic-music-lab/api-reference.md（API参照生成の方式の置き先）
 - research/xrift-world-creation.md
 - AGENTS.md、workflow/AGENTS.md、workflow/design/AGENTS.md、workflow/spec/AGENTS.md
