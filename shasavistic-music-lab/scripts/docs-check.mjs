@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const jsonPath = join(rootDir, 'tmp', 'typedoc.json');
-const htmlDir = join(rootDir, 'tmp', 'typedoc');
+const htmlDir = join(rootDir, 'docs', 'api');
 
 // 存在を保証する代表口。種別は TypeDoc の ReflectionKind の数値。
 // World は const のため Variable (32)、WorldProps は Interface (256)。

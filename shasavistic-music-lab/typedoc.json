@@ -5,7 +5,7 @@
   "exclude": ["**/*.test.ts", "**/*.capture.test.ts", "**/dev.tsx"],
   "tsconfig": "./tsconfig.json",
   "skipErrorChecking": false,
-  "out": "tmp/typedoc",
+  "out": "docs/api",
   "json": "tmp/typedoc.json",
   "readme": "none",
   "disableSources": true,

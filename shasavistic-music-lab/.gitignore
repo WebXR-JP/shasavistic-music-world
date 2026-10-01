@@ -17,3 +17,6 @@ dist
 
 # Skills
 .agents
+
+# TypeDoc
+/docs/api/
