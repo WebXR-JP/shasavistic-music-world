@@ -1,0 +1,14 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src"],
+  "entryPointStrategy": "expand",
+  "exclude": ["**/*.test.ts", "**/*.capture.test.ts", "**/dev.tsx"],
+  "tsconfig": "./tsconfig.json",
+  "skipErrorChecking": false,
+  "out": "tmp/typedoc",
+  "json": "tmp/typedoc.json",
+  "readme": "none",
+  "disableSources": true,
+  "cleanOutputDir": true,
+  "treatWarningsAsErrors": true
+}

@@ -75,6 +75,18 @@ npm run preview
 npm run typecheck
 ```
 
+## API 参照の生成
+
+```bash
+# API 参照を tmp/ に生成（HTML と検証用 JSON）
+npm run docs
+
+# 生成と成果物を検査
+npm run docs:check
+```
+
+生成物は追跡対象外のため、生成後に `tmp/typedoc/index.html` をブラウザで開いて閲覧する。
+
 ## 物理設定（physics）
 
 xrift.jsonの`world.physics`セクションでワールドの物理動作をカスタマイズできます。

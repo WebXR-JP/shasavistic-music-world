@@ -20,6 +20,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "docs": "typedoc",
+    "docs:check": "npm run docs && node scripts/docs-check.mjs",
     "test": "vitest run",
     "test:interact": "XRIFT_INTERACT_CAPTURE=1 vitest run src/audio/harmonicInteract.capture.test.ts"
   },
@@ -47,6 +49,7 @@
     "react": "~19.2.4",
     "react-dom": "~19.2.4",
     "three": "^0.183.1",
+    "typedoc": "^0.28.20",
     "typescript": "^5.6.2",
     "vite": "^7.3.1",
     "vite-plugin-dts": "^4.0.0",
