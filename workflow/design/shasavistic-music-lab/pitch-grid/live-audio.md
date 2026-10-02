@@ -47,3 +47,4 @@
 - `workflow/design/shasavistic-music-lab/pitch-grid/remote-sync.md`（共有快照からの反映の結び付けの参照先）
 - `workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md`（再利用可能な包絡の参照先）
 - `workflow/design/shasavistic-music-lab.md`（常設診断口を作らない境界の参照元）
+- `workflow/design/shasavistic-music-lab/semantic-chord-playback.md`（意味論型からの下位経路がこの発音契約を再利用する参照先）
