@@ -45,7 +45,6 @@ Chrome で係数どおりの成分や許容できる音質が得られない場�
 - workflow/design/shasavistic-music-lab.md
 - workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md（声ごとのエンベロープの方式）
 - workflow/design/shasavistic-music-lab/harmonic-synth/polyphony.md（複数声・比率同時発音の方式）
-- workflow/design/shasavistic-music-lab/harmonic-synth/semantic-chord.md（意味論的和音から発音口への変換の方式の参照先）
 - workflow/design/shasavistic-music-lab/pitch-grid.md（MVP格子の方式の参照先。排他の適用範囲の区切りのため）
 - research/シャサフ式音楽向けシンセサイザー 基本波形設計案.md（候補・根拠。決定の正本にしない）
 - workflow/spec/harmonic-synth-capture.md

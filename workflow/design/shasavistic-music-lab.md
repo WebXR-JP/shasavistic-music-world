@@ -52,9 +52,10 @@
 
 ## 参照
 
-MVPの満たし方は子を参照する。MVPの正本は格子操作の `pitch-grid.md`（＋子文書）とし、調波シンセの探索はMVP対象外として `harmonic-synth.md` 系に置く。運用規則は上位文書による。
+MVPの満たし方は子を参照する。MVPの正本は格子操作の `pitch-grid.md`（＋子文書）と静的な和音の意味論型の `semantic-chord.md` に分け、調波シンセの探索はMVP対象外として `harmonic-synth.md` 系に置く。運用規則は上位文書による。
 
 - workflow/design/shasavistic-music-lab/pitch-grid.md（MVPの正本。格子操作・音高・発音の満たし方）
+- workflow/design/shasavistic-music-lab/semantic-chord.md（MVPの正本。静的な和音とベースの意味論型と純粋変換の満たし方）
 - workflow/design/shasavistic-music-lab/harmonic-synth.md（MVP対象外の調波シンセ探索の置き先）
 - workflow/design/shasavistic-music-lab/api-reference.md（API参照生成の方式の置き先）
 - research/xrift-world-creation.md
