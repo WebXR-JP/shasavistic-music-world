@@ -23,7 +23,7 @@
 
 呼び出し側が `SemanticChord` と解音周波数を供給し、`resolveSemanticChord`、純粋な声仕様変換、session を経て `PitchGridSound` へ届ける。
 
-- session は発音口を専有する。既存 `pitchGridController` とは別経路とし、同じ発音口へ二重に反映しない。所有は一つにする。格子経路と意味論経路が同時に鳴りうることへの調停は今回の対象外であり、上半分の設計（`pitch-grid/semantic-input.md`）で決める
+- session は発音口を専有する。他の経路と同じ発音口へ二重に反映しない。所有は一つにする。格子経路と意味論経路が同時に鳴りうることへの調停は今回の対象外であり、上半分の設計（`pitch-grid/semantic-input.md`）で決める
 
 ### 純粋変換
 
@@ -50,7 +50,7 @@
 
 ## 採用しない案
 
-- `pitchGridController` に意味論入力を継ぎ足す案。責務混在と所有の二重化を招くため
+- 意味論入力を既存の操作統合へ継ぎ足す案。責務混在と所有の二重化を招くため
 - 音ごとの単純折返しで音域を合わせる案。集合の最短間隔優先を保証せず、別の正本になるため。今回は折返し自体を行わない
 - 上限超過の打ち切り・声の奪取・別経路への自動切替。黙って落とすと意味論の欠落を隠すため
 - `PITCH_GRID_BASE_FREQUENCY_HZ` を解音の既定に流用する案。解音周波数は上位が明示して渡すため、既定値による暗黙の供給を置かないため
@@ -82,7 +82,7 @@
 
 - 解決から実仕様までの接続、検査失敗時に発音口を更新しないこと、通常反映と次元切替の使い分け、停止・破棄、失敗の伝達、上限超過の拒否。代替の `PitchGridSound` で配線を確かめる
 
-既存 `semanticChord.test.ts` は意味論解決の保証を維持し、発音接続検査を混ぜない。既存 `pitchGridSound.test.ts`・`pitchGridController.test.ts` は既存の配線・寿命の保証を維持し、今回変更しない。
+既存 `semanticChord.test.ts` は意味論解決の保証を維持し、発音接続検査を混ぜない。既存 `pitchGridSound.test.ts` は既存の配線・寿命の保証を維持し、今回変更しない。
 
 純粋変換にブラウザ採取は要しない。新 session を通した実発音の完成を主張する段階で、既存 `pitchGrid.capture.test.ts` の足場を使った Chrome 採取を一つ追加する。別の診断基盤は作らない。UI 上半分・ホスト・物理出力は今回未確認とする。
 
@@ -95,7 +95,6 @@
 - `requirements/intent/shasavistic-music-world.md:48-49,63-64`（`:48-49` は音域・間隔の要求、`:63-64` は静的な和音とベースの要求の参照元）
 - `shasavistic-music-lab/src/audio/semanticChord.ts`（型と解決の参照先）
 - `shasavistic-music-lab/src/audio/pitchGridSound.ts`（発音口と声仕様・上限の参照先）
-- `shasavistic-music-lab/src/audio/pitchGridController.ts`（別経路とする制御器の参照先）
 - `shasavistic-music-lab/src/audio/pitchGrid.ts`（次元の対応表の参照先）
 - `workflow/design/shasavistic-music-lab.md`（親。分担と境界の参照元）
 - `workflow/design/AGENTS.md`、`workflow/AGENTS.md`（設計と検証の運用規則の参照元）

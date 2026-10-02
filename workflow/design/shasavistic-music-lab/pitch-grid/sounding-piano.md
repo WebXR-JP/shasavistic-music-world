@@ -46,4 +46,3 @@
 - `workflow/design/shasavistic-music-lab/pitch-grid/live-audio.md`（声の寿命と減衰、表示源の方式の参照元）
 - `workflow/spec/harmonic-synth-capture.md`（未実行条件の置き先）
 - `shasavistic-music-lab/src/audio/pitchGridSound.ts`（声の管理の参照先）
-- `shasavistic-music-lab/src/audio/pitchGridController.ts`（快照と通知の参照先）

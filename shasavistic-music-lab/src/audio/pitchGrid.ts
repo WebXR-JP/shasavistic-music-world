@@ -9,8 +9,8 @@
  * 論理比と発音用配置を混同しない。
  * 右・上へ進むことが常に実音の上昇とは扱わない。
  *
- * 音声文脈や声の寿命は扱わず、発音側（`pitchGridSound`）と
- * 操作統合（`pitchGridController`）から分離する。
+ * 音声文脈や声の寿命は扱わず、発音側（`pitchGridSound`）や
+ * 操作の組み立てから分離する。
  *
  * @packageDocumentation
  */

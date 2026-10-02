@@ -1,7 +1,7 @@
 /**
  * 正規化済み共有意図から session への意味論経路の配線検査。
  *
- * 代替の session で次を確かめる。旧・新経路の同時生成なし・空集合での
+ * 代替の session で次を確かめる。他の発音口を生成せず単一 session を使うこと・空集合での
  * 無生成と停止・配置済み指数の伝達・解音周波数の明示・表示の実発音中継・
  * 上限拒否での部分反映なし・根と配置の変更・連続次元変更・再開失敗・
  * 停止と破棄の競合・声数を容量判定に使わないこと。具体値はこの検査に置く。
@@ -224,13 +224,13 @@ function expectedChordOf(intent: PitchGridIntent): SemanticChord {
 }
 
 describe('経路の単一性', () => {
-  it('旧経路の発音口を作らず新 session だけを使う', async () => {
+  it('他の発音口を作らず単一 session だけを使う', async () => {
     const { reflector, session, createdSessions } = createHarness();
     const intent = twoPointIntent();
     reflector.reflect(intent);
     await flush();
 
-    // 新制御器に旧経路の生成口の差し口はなく、session だけを使うこと。
+    // 反射器は session だけを使い、他の発音口の生成口を持たないこと。
     // session は反射器の生成時に一度だけ確保する。
     expect(createdSessions()).toBe(1);
     expect(session.reflectCalls).toHaveLength(1);

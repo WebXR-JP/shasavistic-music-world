@@ -191,7 +191,7 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
     failureMessage: null,
   }));
   // 親操作部品の存続に対応する反射器。意味論 session を専有する単一経路であり、
-  // 旧 `pitchGridController` の経路は使わない。発音口の生成は初回の発音まで遅らせる。
+  // 発音口の生成は初回の発音まで遅らせる。
   const reflectorRef = useRef<PitchGridSemanticSoundReflector | null>(null);
 
   useEffect(() => {

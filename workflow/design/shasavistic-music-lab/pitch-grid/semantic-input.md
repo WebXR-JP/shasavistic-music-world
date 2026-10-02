@@ -45,7 +45,7 @@
 - 空集合は `stop()` とする
 - 失敗はローカル表示へ届け、意図を巻き戻さない
 - 次元判定を session と二重に持たない
-- 旧 `pitchGridController` は製品経路から外す。二経路併存・入力条件による自動フォールバックはしない
+- 発音への経路は単一とし、二経路併存・入力条件による自動フォールバックはしない
 
 ### 状態所有
 
@@ -62,7 +62,7 @@
 ## 採用しない案
 
 - 直ちに置換すること。接続・検証の到達点が分かれるため。下半分単独は未検証、ベース込みは未確定であり、いずれも実装・計測前なので達成済みとしない。既存配置の `k` を正しく伝達すればベースなしの上半分＋下半分で既存の220–1760Hz・間隔目的を保持しうるが、下半分単独は未達であり、ベース込みは未確定のためMVP全体では未達とする
-- 二経路併存、条件フォールバック、根未指定時だけ旧経路を使うこと。所有の二重化を招くため
+- 二経路併存、条件フォールバック、根未指定時の代替経路の使用。所有の二重化を招くため
 - 周波数からの逆算、配置の別実装。既存配置の正本と二重化するため
 - 解音の訪問者指定・和音導出。今回は中央固定のため
 
@@ -87,8 +87,8 @@
 方針のみを定め、具体値と判定手順は検証側へ置き、この文書に複製しない。
 
 - 新規 `shasavistic-music-lab/src/audio/pitchGridSemanticChord.test.ts` が所有する判定は、純粋変換（根と解音の差、各構成音と根の差、根の重複なし、単音・二音の保持、配置指数の伝達、根変更で同じ格子点の解決音高を保つこと、解音再基準化で音高関係を保つこと、入力非変更、不正入力拒否）とする
-- 新規 `shasavistic-music-lab/src/audio/pitchGridSemanticController.test.ts` が所有する判定は、統合（旧・新経路が同時生成されないこと、空集合で無生成と停止、表示が実発音一覧から更新されること、上限拒否で部分反映しないこと、根・配置変更と連続次元変更と再開失敗と停止・破棄の競合、`voiceCount` を容量判定に使わないこと）とする
-- 既存検査（`pitchGridSound.test.ts`、`pitchGridController.test.ts` 等）の保証を維持し、新経路の検査は新規へ置く
+- 新規 `shasavistic-music-lab/src/audio/pitchGridSemanticController.test.ts` が所有する判定は、統合（他の発音口を生成せず単一 session を使うこと、空集合で無生成と停止、表示が実発音一覧から更新されること、上限拒否で部分反映しないこと、根・配置変更と連続次元変更と再開失敗と停止・破棄の競合、`voiceCount` を容量判定に使わないこと）とする
+- 既存検査（`pitchGridSound.test.ts` 等）の保証を維持し、意味論経路の検査は新規へ置く
 - 実操作・実信号は既存採取基盤を使い、操作から意図・組立て・session・実音声グラフを通す採取を、実発音の完成を主張する段階で追加する。代替物への呼出し記録だけで接続完了としない
 
 ## 参照
@@ -103,7 +103,6 @@
 - `workflow/design/shasavistic-music-lab/pitch-grid/sounding-piano.md`（ピアノ表示の正本の参照先）
 - `shasavistic-music-lab/src/audio/pitchGrid.ts`（対応表の参照先）
 - `shasavistic-music-lab/src/audio/pitchGridSound.ts`（発音口と表示一覧の参照先）
-- `shasavistic-music-lab/src/audio/pitchGridController.ts`（旧経路の参照先）
 - `shasavistic-music-lab/src/audio/semanticChord.ts`（意味論型の参照先）
 - `workflow/design/shasavistic-music-lab.md`（親。分担と境界の参照元）
 - `workflow/design/AGENTS.md`、`workflow/AGENTS.md`（設計と検証の運用規則の参照元）
