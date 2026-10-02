@@ -3,8 +3,9 @@
  *
  * 呼び出し側が `SemanticChord` と解音周波数を供給し、解決・純粋変換・
  * 検査を経て専有の `PitchGridSound` へ届ける。既存 `pitchGridController`
- * とは別経路とし、同じ発音口への二重反映はしない。常設診断口・表示快照・
- * 共有状態は持たない。
+ * とは別経路とし、同じ発音口への二重反映はしない。ピアノ表示のため、
+ * 専有する発音口の保持中一覧と変更通知だけを中継し、発振器などの
+ * 音声資源は公開しない。常設診断口・共有状態は持たない。
  *
  * @packageDocumentation
  */
@@ -13,6 +14,7 @@ import {
   PITCH_GRID_MAX_VOICES,
   createPitchGridSound,
   type PitchGridSound,
+  type PitchGridSoundingVoice,
 } from './pitchGridSound';
 import { resolveSemanticChord, type SemanticChord } from './semanticChord';
 import { toSemanticChordVoiceSpecs } from './semanticChordVoices';
@@ -59,6 +61,24 @@ export interface SemanticChordSoundSession {
    * 発音口が未生成の場合は何もしない。複数回呼んでも破棄は一度だけ行う。
    */
   dispose(): Promise<void>;
+  /**
+   * 専有する発音口の保持中かつ再開成立した声の読み取り専用一覧（表示用）。
+   *
+   * 専有の `PitchGridSound.soundingVoices` をそのまま中継する。
+   * 発音口が未生成のときは空の一覧を返す。
+   * 発振器などの音声資源は含まない。
+   */
+  readonly soundingVoices: readonly PitchGridSoundingVoice[];
+  /**
+   * 専有する発音口の表示内容の変更通知を中継する（表示用）。
+   *
+   * 内容が変わったときだけ購読者へ知らせる。発音口の生成前に購読しても、
+   * 生成後の変更通知を受け取れる。
+   *
+   * @param listener - 一覧の内容変化時の通知口。同期的に呼ぶ。
+   * @returns 購読解除口。解除後は呼ばない。
+   */
+  subscribeSounding(listener: () => void): () => void;
 }
 
 /**
@@ -77,8 +97,34 @@ export function createSemanticChordSoundSession(
   let lastDimension: SemanticChord['primaryDimension'] | null = null;
   let disposed = false;
   let disposePromise: Promise<void> | null = null;
+  // 表示用の購読者。発音口の生成前から受け付け、生成時に発音口側の
+  // 変更通知をこの集合への転送へつなぐ。転送の購読解除は保持せず、
+  // 破棄は専有の発音口の破棄に委ねる。破棄の過程で表示内容が変われば
+  // 転送により知らせ、破棄の完了後は発音口から通知は届かない。
+  const soundingListeners = new Set<() => void>();
+  const notifySoundingListeners = (): void => {
+    for (const listener of [...soundingListeners]) {
+      listener();
+    }
+  };
+  const ensureSound = (): PitchGridSound => {
+    if (sound === null) {
+      sound = createSound();
+      sound.subscribeSounding(notifySoundingListeners);
+    }
+    return sound;
+  };
 
   return {
+    get soundingVoices(): readonly PitchGridSoundingVoice[] {
+      return sound?.soundingVoices ?? [];
+    },
+    subscribeSounding(listener: () => void): () => void {
+      soundingListeners.add(listener);
+      return (): void => {
+        soundingListeners.delete(listener);
+      };
+    },
     async reflect(chord: SemanticChord, resolutionToneFrequencyHz: number): Promise<void> {
       if (disposed) {
         throw new Error('破棄後の口は使えない');
@@ -92,13 +138,11 @@ export function createSemanticChordSoundSession(
           `意味論の声数は同時発音の上限以下であること: ${specs.length} > ${PITCH_GRID_MAX_VOICES}`,
         );
       }
-      if (sound === null) {
-        sound = createSound();
-      }
+      const activeSound = ensureSound();
       if (lastDimension !== null && lastDimension !== chord.primaryDimension) {
-        await sound.switchDimension(specs);
+        await activeSound.switchDimension(specs);
       } else {
-        await sound.setVoices(specs);
+        await activeSound.setVoices(specs);
       }
       lastDimension = chord.primaryDimension;
     },

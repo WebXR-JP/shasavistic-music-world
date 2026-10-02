@@ -188,7 +188,10 @@ export function soundingCandidatesFor(
   const minK = Math.ceil(-logRatio);
   const maxK = Math.floor(3 - logRatio);
   const candidates: PitchGridSoundingCandidate[] = [];
-  for (let k = minK; k <= maxK; k += 1) {
+  // 論理比が1の点では `-logRatio` が `-0` になり `Math.ceil` が `-0` を返すため、
+  // 整数の配置指数に `-0` が混ざらないよう `+0` に正規化する（`k === 0` は `-0` でも真）。
+  const startK = minK === 0 ? 0 : minK;
+  for (let k = startK; k <= maxK; k += 1) {
     const frequency =
       ((PITCH_GRID_BASE_FREQUENCY_HZ * ratio.numerator) / ratio.denominator) * 2 ** k;
     if (frequency >= PITCH_GRID_SOUND_LOW_HZ && frequency <= PITCH_GRID_SOUND_HIGH_HZ) {
@@ -199,15 +202,18 @@ export function soundingCandidatesFor(
 }
 
 /**
- * 集合単位の配置結果の1声分。鍵と発音周波数の組。
+ * 集合単位の配置結果の1声分。鍵と発音周波数と配置指数の組。
  *
  * 全声仕様を作る材料であり、声の寿命や利得は含まない。
+ * `k` は復元済みの選択候補の値をそのまま返し、再計算しない。
  */
 export interface PitchGridAssignedVoice {
   /** 座標の鍵（`x,y` 形式）。 */
   readonly key: string;
   /** 配置で選ばれた発音周波数（Hz）。発音域に収まる。 */
   readonly frequency: number;
+  /** 素数2の指数の整数。候補列挙の `k` をそのまま返す。 */
+  readonly k: number;
 }
 
 // 隣接間隔の目標の上限（オクターブ単位）。1/4オクターブ。
@@ -530,7 +536,8 @@ export function assignPitchGridFrequencies(
     if (candidate === undefined) {
       throw new Error('発音配置の復元に失敗した');
     }
-    return { key: pitchGridKey(point), frequency: candidate.frequency };
+    // 配置指数は復元済みの選択候補の値をそのまま返し、逆算や選び直しはしない。
+    return { key: pitchGridKey(point), frequency: candidate.frequency, k: candidate.k };
   });
 }
 
@@ -592,22 +599,36 @@ export interface PitchGridSnapshot {
 }
 
 /**
- * 共有する演奏意図。選択次元・オンの格子点集合・任意の機能根の座標鍵を載せる。
+ * 機能根の由来。操作意図の履歴であり、音高の意味ではない。
+ *
+ * `default` は初回オン・選び直しによる既定根、`visitor` は訪問者の明示指定、
+ * `unknown` は由来がない旧値を読んだときの補完である。通常操作では生成しない。
+ * 空集合では根と由来を持たないため `null` とする。
+ */
+export type PitchGridFunctionalRootSource = 'default' | 'visitor' | 'unknown';
+
+/**
+ * 共有する演奏意図。選択次元・オンの格子点集合・機能根の座標鍵と由来を載せる。
  *
  * 発振器や実際に鳴っている声は載せず、各端末に残す。
  * `onPoints` は重複を除き固定座標順（`y` 降順、次いで `x` 昇順）に
  * 正規化した座標鍵（`x,y` 形式）の配列とし、直列化できる形にする。
  * `Map` は載せない。`functionalRootKey` はオン点のいずれかの座標鍵だけを
- * 取り、未指定時は `null` とする。指定モード（選択中であること）は
- * 各端末に置き、確定した根の座標鍵だけを共有する。
+ * 取り、空のときだけ未指定（`null`）とする。オン集合が空でない間は
+ * 機能根を常に定める。`functionalRootSource` は根の由来であり、
+ * 空のときだけ `null` とする。由来は表示だけに使い、
+ * `SemanticChord` には入れない。指定モード（選択中であること）は
+ * 各端末に置き、確定した根の座標鍵と由来だけを共有する。
  */
 export interface PitchGridIntent {
   /** 選択次元。 */
   readonly dimension: PitchGridDimension;
   /** 正規化した座標鍵の配列。固定座標順に並ぶ。 */
   readonly onPoints: readonly string[];
-  /** 任意の機能根の座標鍵。未指定時は `null`。 */
+  /** 機能根の座標鍵。空のときだけ `null`。 */
   readonly functionalRootKey: string | null;
+  /** 根の由来。空のときだけ `null`。 */
+  readonly functionalRootSource: PitchGridFunctionalRootSource | null;
 }
 
 /**
@@ -622,6 +643,7 @@ export const PITCH_GRID_INITIAL_INTENT: PitchGridIntent = {
   dimension: 3,
   onPoints: [],
   functionalRootKey: null,
+  functionalRootSource: null,
 };
 
 /**
@@ -662,14 +684,24 @@ function normalizePitchGridKeys(keys: readonly unknown[]): string[] {
 }
 
 /**
+ * 機能根の由来として扱える値を判定する。
+ *
+ * @param value - 判定対象。共有機構から届いた値も受け付ける。
+ * @returns `default`・`visitor`・`unknown` のいずれかの場合だけ `true`。
+ */
+function isFunctionalRootSource(value: unknown): value is PitchGridFunctionalRootSource {
+  return value === 'default' || value === 'visitor' || value === 'unknown';
+}
+
+/**
  * 共有機構から届いた値を演奏意図として読み替える。
  *
  * 共有値は他端末の書き込みであり、型どおりとは限らないため、
  * 境界で実行時に確かめて正規化する。次元が不正なら初期次元（3次元）に倒し、
- * 鍵でない要素と格子外の座標は落とす。機能根は正規化したオン点の
- * いずれかの座標鍵だけを取り、鍵でない・格子外・集合外の場合は
- * 未指定（`null`）に倒す。読み替えだけを行い、
- * 共有値への書き戻しはしない。
+ * 鍵でない要素と格子外の座標は落とす。非空で根が欠落・不正・集合外なら
+ * 正規化したオン列の先頭を由来 `default` として補完し、根は有効だが
+ * 由来がない旧値は `unknown` として補完する。空なら根と由来を除く。
+ * 読み替えだけを行い、共有値への書き戻しはしない。
  *
  * @param value - 共有機構から届いた値。
  * @returns 正規化した演奏意図。
@@ -682,18 +714,29 @@ export function resolvePitchGridIntent(value: unknown): PitchGridIntent {
     readonly dimension?: unknown;
     readonly onPoints?: unknown;
     readonly functionalRootKey?: unknown;
+    readonly functionalRootSource?: unknown;
   };
   const dimension = isPitchGridDimension(record.dimension) ? record.dimension : 3;
   const raw = Array.isArray(record.onPoints) ? record.onPoints : [];
   const onPoints = normalizePitchGridKeys(raw);
+  if (onPoints.length === 0) {
+    return { dimension, onPoints, functionalRootKey: null, functionalRootSource: null };
+  }
   // 鍵生成は点→鍵の既存の扱いに寄せ、独自形式を新設しない。
   const rootPoint = pitchGridPointFromKey(record.functionalRootKey);
   const rootKey = rootPoint === null ? null : pitchGridKey(rootPoint);
-  return {
-    dimension,
-    onPoints,
-    functionalRootKey: rootKey !== null && onPoints.includes(rootKey) ? rootKey : null,
-  };
+  if (rootKey !== null && onPoints.includes(rootKey)) {
+    // 根は有効だが由来がない旧値は `unknown` とし、通常操作では生成しない。
+    const source = isFunctionalRootSource(record.functionalRootSource)
+      ? record.functionalRootSource
+      : 'unknown';
+    return { dimension, onPoints, functionalRootKey: rootKey, functionalRootSource: source };
+  }
+  const head = onPoints[0] ?? null;
+  if (head === null) {
+    return { dimension, onPoints, functionalRootKey: null, functionalRootSource: null };
+  }
+  return { dimension, onPoints, functionalRootKey: head, functionalRootSource: 'default' };
 }
 
 /**
@@ -723,7 +766,10 @@ export function pitchGridSnapshotFromIntent(value: unknown): PitchGridSnapshot {
  * `useInstanceState` の関数型更新へ渡す。前提が正規化されていない場合も
  * 読み替えてから遷移し、同時操作の取りこぼし（後に届いた書き込みが残る）は
  * 許容する。発音の有無の判断（空集合の無発音など）は反映側が結果に従う。
- * 対応点をオフにしたら機能根を解除し、それ以外は保つ。
+ * 空集合から点をオンにしたらその点を既定根（由来 `default`）とし、
+ * 根以外のオン・オフでは現在の根と由来を保ち、根をオフにし残りがある
+ * 場合は残りの先頭を既定根とし、最後の点をオフにしたら根と由来を除く。
+ * 解除操作は設けず、選び直しはこの遷移が担う。
  *
  * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
  * @param point - 操作した格子点。範囲内であること。
@@ -743,13 +789,38 @@ export function togglePitchGridIntent(
     ? base.onPoints.filter((entry) => entry !== key)
     : [...base.onPoints, key];
   const onPoints = normalizePitchGridKeys(next);
+  if (onPoints.length === 0) {
+    return { dimension: base.dimension, onPoints, functionalRootKey: null, functionalRootSource: null };
+  }
+  if (base.onPoints.length === 0) {
+    return {
+      dimension: base.dimension,
+      onPoints,
+      functionalRootKey: key,
+      functionalRootSource: 'default',
+    };
+  }
+  if (
+    base.functionalRootKey !== null &&
+    base.functionalRootSource !== null &&
+    onPoints.includes(base.functionalRootKey)
+  ) {
+    return {
+      dimension: base.dimension,
+      onPoints,
+      functionalRootKey: base.functionalRootKey,
+      functionalRootSource: base.functionalRootSource,
+    };
+  }
+  const head = onPoints[0] ?? null;
+  if (head === null) {
+    return { dimension: base.dimension, onPoints, functionalRootKey: null, functionalRootSource: null };
+  }
   return {
     dimension: base.dimension,
     onPoints,
-    functionalRootKey:
-      base.functionalRootKey !== null && onPoints.includes(base.functionalRootKey)
-        ? base.functionalRootKey
-        : null,
+    functionalRootKey: head,
+    functionalRootSource: 'default',
   };
 }
 
@@ -759,7 +830,7 @@ export function togglePitchGridIntent(
  * `useInstanceState` の関数型更新へ渡す。移動先を先に判定し、一つでも
  * 格子外へ出る場合と空集合の場合は遷移前の値をそのまま返し、
  * 共有値を実質的に変えない。重なった座標を固定点として特別扱いしない。
- * 機能根の座標鍵も集合と同じだけ移動する。移動は集合全体で行うか
+ * 機能根の座標鍵も集合と同じだけ移動し、由来は保つ。移動は集合全体で行うか
  * 行わないかのいずれかのため、移動後の根は常にオン集合内に収まる。
  *
  * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
@@ -794,6 +865,7 @@ export function movePitchGridIntent(
     onPoints: normalizePitchGridKeys(shifted.map(pitchGridKey)),
     functionalRootKey:
       rootPoint === null ? null : pitchGridKey({ x: rootPoint.x + dx, y: rootPoint.y + dy }),
+    functionalRootSource: rootPoint === null ? null : base.functionalRootSource,
   };
 }
 
@@ -801,7 +873,7 @@ export function movePitchGridIntent(
  * 共有値への純粋な次元選択遷移。
  *
  * `useInstanceState` の関数型更新へ渡す。切替ではオン点列と機能根の
- * 座標鍵を保ち、選択次元だけを更新する。保つのは選ばれたオン点の座標と
+ * 座標鍵と由来を保ち、選択次元だけを更新する。保つのは選ばれたオン点の座標と
  * 役割であり、周波数や音程意味の不変性ではない。全員の選択次元を変える
  * 一括操作であり、座標ごとの所有は持たない。同じ次元の選び直しは
  * 遷移前の値をそのまま返す。
@@ -826,6 +898,7 @@ export function selectPitchGridDimensionIntent(
     dimension,
     onPoints: base.onPoints,
     functionalRootKey: base.functionalRootKey,
+    functionalRootSource: base.functionalRootSource,
   };
 }
 
@@ -833,12 +906,12 @@ export function selectPitchGridDimensionIntent(
  * 共有値への純粋な機能根指定遷移。
  *
  * `useInstanceState` の関数型更新へ渡す。オン点のいずれかの座標鍵だけを
- * 指定でき、選び直しもこの遷移で行う。同じ根の選び直しは遷移前の値を
- * そのまま返す。
+ * 指定でき、由来を `visitor` とする。既定根と同じ点の再指定でも `visitor`
+ * とする。同じ指定根の選び直しは遷移前の値をそのまま返す。
  *
  * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
  * @param point - 機能根にする格子点。オンの点であること。
- * @returns 指定後の演奏意図。同じ根の場合は遷移前の値そのもの。
+ * @returns 指定後の演奏意図。同じ指定根の場合は遷移前の値そのもの。
  * @throws `Error` — 格子外の座標の場合。共有値は変えない。
  * @throws `Error` — オンでない点の場合。共有値は変えない。
  */
@@ -854,25 +927,13 @@ export function specifyFunctionalRootIntent(
   if (!base.onPoints.includes(key)) {
     throw new Error(`オンでない点は機能根に指定できない: ${key}`);
   }
-  if (base.functionalRootKey === key) {
+  if (base.functionalRootKey === key && base.functionalRootSource === 'visitor') {
     return prev;
   }
-  return { dimension: base.dimension, onPoints: base.onPoints, functionalRootKey: key };
-}
-
-/**
- * 共有値への純粋な機能根解除遷移。
- *
- * `useInstanceState` の関数型更新へ渡す。未指定の状態での解除は
- * 遷移前の値をそのまま返す。
- *
- * @param prev - 遷移前の共有値。正規化されていない場合も読み替える。
- * @returns 解除後の演奏意図。未指定の場合は遷移前の値そのもの。
- */
-export function clearFunctionalRootIntent(prev: PitchGridIntent): PitchGridIntent {
-  const base = resolvePitchGridIntent(prev);
-  if (base.functionalRootKey === null) {
-    return prev;
-  }
-  return { dimension: base.dimension, onPoints: base.onPoints, functionalRootKey: null };
+  return {
+    dimension: base.dimension,
+    onPoints: base.onPoints,
+    functionalRootKey: key,
+    functionalRootSource: 'visitor',
+  };
 }

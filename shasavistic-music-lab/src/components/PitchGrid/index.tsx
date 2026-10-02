@@ -2,7 +2,6 @@ import { Interactable, useInstanceState } from '@xrift/world-components';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   allPitchGridPoints,
-  clearFunctionalRootIntent,
   isInPitchGrid,
   isPitchGridDimension,
   movePitchGridIntent,
@@ -21,10 +20,10 @@ import {
   type PitchGridPoint,
 } from '../../audio/pitchGrid';
 import {
-  createPitchGridSoundReflector,
-  type PitchGridSoundReflector,
-  type PitchGridSoundSnapshot,
-} from '../../audio/pitchGridController';
+  createPitchGridSemanticSoundReflector,
+  type PitchGridSemanticSoundReflector,
+  type PitchGridSemanticSoundSnapshot,
+} from '../../audio/pitchGridSemanticController';
 import {
   CHORD_DIAGRAM_POSITION,
   CHORD_DIAGRAM_SIZE,
@@ -118,13 +117,6 @@ const ROOT_MODE_CENTER_X = 3.0;
 const ROOT_MODE_CENTER_Y = 0.95;
 
 /**
- * 機能根の解除釦の中心（部品内座標）。
- * 切替釦の下に縦一列で置く初期候補である。部品形状は未確定であり、
- * XR実画面の確認で決めること。
- */
-const ROOT_CLEAR_CENTER_Y = 0.45;
-
-/**
  * 機能根の状態銘板の中心（部品内座標）。
  * 切替釦の上に置く初期候補である。指定モードと確定した根の有無を
  * 文言で示し、色だけに頼らない。
@@ -189,18 +181,21 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
   // （選択中であること）は各端末の操作状態とし、共有しない。
   const resolvedIntent = useMemo(() => resolvePitchGridIntent(intent), [intent]);
   const functionalRootKey = resolvedIntent.functionalRootKey;
+  const functionalRootSource = resolvedIntent.functionalRootSource;
   // 機能根の指定モード。各端末の操作状態であり、共有意図には載せない。
   const [specifyMode, setSpecifyMode] = useState(false);
   // 実際に鳴った声の表示は各端末ローカルに保つ。意図の共有と発音成立は別物とする。
-  const [soundSnapshot, setSoundSnapshot] = useState<PitchGridSoundSnapshot>(() => ({
+  const [soundSnapshot, setSoundSnapshot] = useState<PitchGridSemanticSoundSnapshot>(() => ({
     voiceCount: 0,
     soundingVoices: [],
+    failureMessage: null,
   }));
-  // 親操作部品の存続に対応する反射器。演奏口の生成は初回の発音まで遅らせる。
-  const reflectorRef = useRef<PitchGridSoundReflector | null>(null);
+  // 親操作部品の存続に対応する反射器。意味論 session を専有する単一経路であり、
+  // 旧 `pitchGridController` の経路は使わない。発音口の生成は初回の発音まで遅らせる。
+  const reflectorRef = useRef<PitchGridSemanticSoundReflector | null>(null);
 
   useEffect(() => {
-    const reflector = createPitchGridSoundReflector({
+    const reflector = createPitchGridSemanticSoundReflector({
       notify: () => {
         setSoundSnapshot({ ...reflector.getSnapshot() });
       },
@@ -212,15 +207,16 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
     };
   }, []);
 
-  // 共有快照の変化を自端末の音へ反映する。自分の操作と遠隔の変化を区別せず、
-  // 同じ一経路に寄せて二重発火を作らない。同値の再反映の抑止は設けず、
-  // 音声側の継続分岐に寄せる。
+  // 共有意図の変化を自端末の音へ反映する。自分の操作と遠隔の変化を区別せず、
+  // 同じ一経路に寄せて二重発火を作らない。機能根を含む共有意図そのものを渡し、
+  // 選び直しは反射器・描画側で行わない。同値の再反映の抑止は設けず、
+  // session・音声側の継続分岐に寄せる。
   useEffect(() => {
     const reflector = reflectorRef.current;
     if (reflector === null) {
       return;
     }
-    reflector.reflect(pitchGridSnapshotFromIntent(intent));
+    reflector.reflect(intent);
     setSoundSnapshot({ ...reflector.getSnapshot() });
   }, [intent]);
 
@@ -286,10 +282,6 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
     },
     [specifyMode, handleSpecifyRoot, handleToggle],
   );
-
-  const handleClearRoot = useCallback(() => {
-    setIntent((prev) => clearFunctionalRootIntent(prev));
-  }, [setIntent]);
 
   const handleToggleSpecifyMode = useCallback(() => {
     setSpecifyMode((prev) => !prev);
@@ -436,9 +428,9 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
         size={CHORD_DIAGRAM_SIZE}
       />
 
-      {/* ========== 機能根の指定モード切替・解除。共有するのは確定した根だけ ========== */}
-      {/* 部品形状は未確定であり、妥当な初期形として次元選択の流儀の釦2個と状態銘板を置く。 */}
-      {/* 指定モードは端末ごとの操作状態とし、共有意図には載せない。 */}
+      {/* ========== 機能根の指定モード切替。共有するのは確定した根と由来だけ ========== */}
+      {/* 部品形状は未確定であり、妥当な初期形として次元選択の流儀の釦と状態銘板を置く。 */}
+      {/* 指定モードは端末ごとの操作状態とし、共有意図には載せない。解除操作は設けない。 */}
       <group position={[ROOT_MODE_CENTER_X, ROOT_MODE_CENTER_Y, 0]}>
         <Interactable
           id="pitch-grid-root-mode"
@@ -461,31 +453,17 @@ export function PitchGrid({ position = [0, 0, 5] }: PitchGridProps): React.JSX.E
           framed={specifyMode}
         />
       </group>
-      <group position={[ROOT_MODE_CENTER_X, ROOT_CLEAR_CENTER_Y, 0]}>
-        <Interactable
-          id="pitch-grid-root-clear"
-          type="button"
-          onInteract={() => {
-            handleClearRoot();
-          }}
-          interactionText={functionalRootKey === null ? '根未指定' : `根を解除 ${functionalRootKey}`}
-        >
-          <mesh position={[0, 0, 0]} castShadow>
-            <boxGeometry args={[ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE, ROOT_BUTTON_SIZE]} />
-            <meshStandardMaterial color={ROOT_BUTTON_COLOR} />
-          </mesh>
-        </Interactable>
-        <TextPlate
-          lines={['根解除', functionalRootKey === null ? '根なし' : '解除する']}
-          size={[ROOT_BUTTON_SIZE + 0.06, ROOT_BUTTON_SIZE + 0.06]}
-          position={[0, 0, ROOT_BUTTON_SIZE / 2 + 0.01]}
-        />
-      </group>
-      {/* 指定モードと確定した根の有無を文言で示し、色だけに頼らない。 */}
+      {/* 指定モードと確定した根の由来を文言で示し、色だけに頼らない。オン点なしのときは根を示さない。 */}
       <TextPlate
         lines={[
           specifyMode ? '根指定中' : '根指定OFF',
-          functionalRootKey === null ? '根未指定' : `根 ${functionalRootKey}`,
+          snapshot.points.length === 0
+            ? 'オン点なし'
+            : functionalRootSource === 'visitor'
+              ? `指定根 ${functionalRootKey ?? ''}`
+              : functionalRootSource === 'unknown'
+                ? `根〈由来不明〉 ${functionalRootKey ?? ''}`
+                : `既定根 ${functionalRootKey ?? ''}`,
         ]}
         size={ROOT_STATUS_SIZE}
         position={[ROOT_MODE_CENTER_X, ROOT_STATUS_CENTER_Y, 0]}

@@ -390,3 +390,109 @@ describe('ベースを含む上限境界', () => {
     await session.dispose();
   });
 });
+
+describe('表示中継', () => {
+  /** 保持中一覧と通知を操れる検査用の発音口。 */
+  interface DisplayFakeSound extends PitchGridSound {
+    /** 保持中一覧に載せる声。 */
+    sounding: PitchGridSoundingVoice[];
+    /** 変更通知を送る。 */
+    emitSounding(): void;
+  }
+
+  function createDisplayFakeSound(): DisplayFakeSound {
+    const listeners = new Set<() => void>();
+    const fake: DisplayFakeSound = {
+      sounding: [],
+      get voiceCount(): number {
+        return 0;
+      },
+      get soundingVoices(): readonly PitchGridSoundingVoice[] {
+        return [...fake.sounding];
+      },
+      subscribeSounding(listener: () => void): () => void {
+        listeners.add(listener);
+        return (): void => {
+          listeners.delete(listener);
+        };
+      },
+      async setVoices(): Promise<void> {},
+      async switchDimension(): Promise<void> {},
+      stopAll(): void {},
+      async dispose(): Promise<void> {},
+      emitSounding(): void {
+        for (const listener of [...listeners]) {
+          listener();
+        }
+      },
+    };
+    return fake;
+  }
+
+  it('発音口の生成前は空の一覧を返す', () => {
+    const fake = createDisplayFakeSound();
+    const session = createSemanticChordSoundSession({ createSound: () => fake });
+
+    expect(session.soundingVoices).toEqual([]);
+  });
+
+  it('生成後は専有する発音口の保持中一覧を中継する', async () => {
+    const fake = createDisplayFakeSound();
+    const session = createSemanticChordSoundSession({ createSound: () => fake });
+    await session.reflect(twoVoiceChord(), 440);
+
+    fake.sounding = [
+      { key: 'semantic:root:1/1', frequency: 440 },
+      { key: 'semantic:tone:3/1', frequency: 1320 },
+    ];
+
+    // 実発音一覧の変化をそのまま読むこと。
+    expect(session.soundingVoices).toEqual(fake.sounding);
+    await session.dispose();
+  });
+
+  it('生成前後の購読へ発音口の変更通知を中継する', async () => {
+    const fake = createDisplayFakeSound();
+    const session = createSemanticChordSoundSession({ createSound: () => fake });
+    let earlyCalls = 0;
+    let lateCalls = 0;
+    const stopEarly = session.subscribeSounding((): void => {
+      earlyCalls += 1;
+    });
+
+    await session.reflect(twoVoiceChord(), 440);
+    const stopLate = session.subscribeSounding((): void => {
+      lateCalls += 1;
+    });
+
+    fake.emitSounding();
+
+    expect(earlyCalls).toBe(1);
+    expect(lateCalls).toBe(1);
+    stopEarly();
+    stopLate();
+    fake.emitSounding();
+
+    // 解除後は呼ばないこと。
+    expect(earlyCalls).toBe(1);
+    expect(lateCalls).toBe(1);
+    await session.dispose();
+  });
+
+  it('発振器などの音声資源を公開しない', async () => {
+    const fake = createDisplayFakeSound();
+    const session = createSemanticChordSoundSession({ createSound: () => fake });
+    await session.reflect(twoVoiceChord(), 440);
+    fake.sounding = [{ key: 'semantic:root:1/1', frequency: 440 }];
+
+    // 口は反映・停止・破棄と表示中継だけであり、発振器を持たないこと。
+    expect(Object.keys(session).sort()).toEqual(
+      ['dispose', 'reflect', 'soundingVoices', 'stop', 'subscribeSounding'].sort(),
+    );
+    expect(session.soundingVoices).toEqual([{ key: 'semantic:root:1/1', frequency: 440 }]);
+    for (const voice of session.soundingVoices) {
+      expect(Object.keys(voice).sort()).toEqual(['frequency', 'key']);
+    }
+    await session.dispose();
+  });
+});

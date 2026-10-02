@@ -122,6 +122,22 @@ function flush(): Promise<void> {
   });
 }
 
+/**
+ * 発音口へ渡す全声仕様の期待値を作る。
+ *
+ * 配置結果の `k` は発音口へ渡さず、鍵と周波数の写像だけを渡す。
+ * 比較もその写像で行い、配置指数の有無で合否を変えない。
+ */
+function voiceSpecsOf(
+  points: readonly { x: number; y: number }[],
+  dimension: 3 | 4 | 5,
+): { key: string; frequency: number }[] {
+  return assignPitchGridFrequencies(points, dimension).map(({ key, frequency }) => ({
+    key,
+    frequency,
+  }));
+}
+
 function createReflector(): {
   reflector: ReturnType<typeof createPitchGridSoundReflector>;
   sound: FakePitchGridSound;
@@ -159,7 +175,7 @@ describe('共有快照のローカル音声への反映', () => {
     reflector.reflect(pitchGridSnapshotFromIntent(intent));
     expect(sound.voiceCalls).toHaveLength(1);
     // 配置関数の結果をそのまま全声仕様として渡すこと。
-    expect(sound.voiceCalls[0]).toEqual(assignPitchGridFrequencies([{ x: 0, y: 0 }], 3));
+    expect(sound.voiceCalls[0]).toEqual(voiceSpecsOf([{ x: 0, y: 0 }], 3));
     expectSoundSnapshot(reflector.getSnapshot(), 1, []);
   });
 
@@ -181,7 +197,7 @@ describe('共有快照のローカル音声への反映', () => {
     const remoteIntent = togglePitchGridIntent(PITCH_GRID_INITIAL_INTENT, { x: 1, y: 0 });
     const received: unknown = JSON.parse(JSON.stringify(remoteIntent));
     reflector.reflect(pitchGridSnapshotFromIntent(received));
-    expect(sound.voiceCalls).toEqual([assignPitchGridFrequencies([{ x: 1, y: 0 }], 3)]);
+    expect(sound.voiceCalls).toEqual([voiceSpecsOf([{ x: 1, y: 0 }], 3)]);
   });
 
   it('移動は差分として一括反映する', () => {
@@ -195,7 +211,7 @@ describe('共有快照のローカル音声への反映', () => {
     // 移動後の集合を一度だけ反映すること。
     expect(sound.voiceCalls).toHaveLength(callsBefore + 1);
     expect(sound.voiceCalls[callsBefore]).toEqual(
-      assignPitchGridFrequencies(
+      voiceSpecsOf(
         [
           { x: 1, y: 1 },
           { x: 2, y: 1 },
@@ -226,7 +242,7 @@ describe('共有快照のローカル音声への反映', () => {
     // 通常の停止と差分反映の重ね呼び出しはしないこと。
     expect(sound.switchCalls).toHaveLength(1);
     expect(sound.switchCalls[0]).toEqual(
-      assignPitchGridFrequencies(
+      voiceSpecsOf(
         [
           { x: 0, y: 0 },
           { x: 1, y: 0 },
@@ -286,7 +302,7 @@ describe('共有快照のローカル音声への反映', () => {
     reflector.reflect(pitchGridSnapshotFromIntent(added));
     expect(sound.voiceCalls).toHaveLength(voiceCallsBefore + 1);
     expect(sound.voiceCalls[voiceCallsBefore]).toEqual(
-      assignPitchGridFrequencies(
+      voiceSpecsOf(
         [
           { x: 0, y: 0 },
           { x: 1, y: 0 },

@@ -365,11 +365,14 @@ function drawDynamicChordDiagram(
     drawing.font = selectPlateFont(measure, 44, true, '和音未成立（3点以上で成立）');
     drawing.fillText('和音未成立（3点以上で成立）', width / 2, CHORD_DIAGRAM_NOTICE_Y);
   }
-  if (!layout.rootSpecified) {
+  // 次元線は機能根があるときだけ引き、既定根でも引く。引かないのは
+  // オン点がないときだけであり、そのときは空状態の説明として示す。
+  // 描画側が独自に推定根を決めることはしない。
+  if (layout.pitchLines.length === 0) {
     drawing.textAlign = 'center';
     drawing.fillStyle = '#cfe3ff';
-    drawing.font = selectPlateFont(measure, 24, false, '根未指定のため次元線なし');
-    drawing.fillText('根未指定のため次元線なし', width / 2, CHORD_DIAGRAM_NOTICE_Y + 56);
+    drawing.font = selectPlateFont(measure, 24, false, 'オン点なしのため次元線なし');
+    drawing.fillText('オン点なしのため次元線なし', width / 2, CHORD_DIAGRAM_NOTICE_Y + 56);
   }
 }
 
