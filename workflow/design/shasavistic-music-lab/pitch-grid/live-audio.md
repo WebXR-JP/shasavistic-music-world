@@ -48,3 +48,4 @@
 - `workflow/design/shasavistic-music-lab/harmonic-synth/adsr.md`（再利用可能な包絡の参照先）
 - `workflow/design/shasavistic-music-lab.md`（常設診断口を作らない境界の参照元）
 - `workflow/design/shasavistic-music-lab/semantic-chord-playback.md`（意味論型からの下位経路がこの発音契約を再利用する参照先）
+- `workflow/design/shasavistic-music-lab/pitch-grid/semantic-input.md`（格子入力から意味論型への上半分の参照先。この文書は旧経路の声管理の正本にとどめ、上半分の責務境界は同文書による）

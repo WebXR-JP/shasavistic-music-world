@@ -23,6 +23,7 @@
 子への案内に留め、子の決定内容をここへ複製しない。
 
 - `workflow/design/shasavistic-music-lab/pitch-grid/pitch-assignment.md`（論理比と発音用配置の正本）
+- `workflow/design/shasavistic-music-lab/pitch-grid/semantic-input.md`（格子入力から意味論型への上半分の正本。組立て・単一経路・上位接続の責務境界は同文書による）
 - `workflow/design/shasavistic-music-lab/pitch-grid/live-audio.md`（個別声と共有文脈の正本）
 - `workflow/design/shasavistic-music-lab/pitch-grid/remote-sync.md`（遠隔共有の正本）
 - `workflow/design/shasavistic-music-lab/pitch-grid/sounding-piano.md`（鳴り中音高のピアノ対照表示の正本）
@@ -42,7 +43,7 @@
 
 ## 未確定の候補
 
-八方向操作・次元選択・機能根指定の具体的な部品形状（指定モードに入る釦・解除操作を含む）は未確定とし、実画面とホスト操作の確認で決める。何が分かれば決められるかは実装時に記録する。
+八方向操作・次元選択・機能根指定の具体的な部品形状（指定モードに入る釦を含む）は未確定とし、実画面とホスト操作の確認で決める。機能根の解除は設けない（正本は `pitch-grid/remote-sync.md` を参照）。何が分かれば決められるかは実装時に記録する。
 
 ## 見直し条件
 

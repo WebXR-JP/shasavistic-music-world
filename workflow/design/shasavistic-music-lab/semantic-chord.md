@@ -12,7 +12,7 @@
 
 ## 要求元
 
-`requirements/intent/music-semantic-structure.md:193-201` の静的な和音とベースと `requirements/intent/shasavistic-music-world.md:62,68` を要求元とする。要求を再定義しない。
+`requirements/intent/music-semantic-structure.md:193-200` の静的な和音とベースと `requirements/intent/shasavistic-music-world.md:63,68`（`:63` は静的な和音とベースの要求、`:68` は時間再生を対象外とする根拠）を要求元とする。要求を再定義しない。
 
 - 和音とベースの音高は解音を基準として定めること
 - 機能根は解音からの相対移動、他の構成音とベースは機能根からの相対移動で表すこと
@@ -76,7 +76,7 @@
 - ベースの所属と最低音条件
 - 役割からの自動音高導出
 
-MVPでの解音の定め方（格子中央への固定か、訪問者による指定か、和音からの導出か）とその供給元、およびMVPでのベースの扱い（訪問者による指定か、和音からの導出か）と格子のオン点・最大15点との関係は、本設計の対象外とし、要求の要具体化として残す（それぞれ `requirements/intent/music-semantic-structure.md:201`、`requirements/intent/shasavistic-music-world.md:64`）。
+解音とベースは要求で確定済みであり、本設計の対象外とする。解音は要求（`requirements/intent/music-semantic-structure.md:200`）と設計正本（`pitch-grid/semantic-input.md`）を参照する。ベースは訪問者が機能根を基準とする位置に指定し、オン点と合わせた同時発音は上限内とする（`requirements/intent/shasavistic-music-world.md:64`）。格子からの組立ては `pitch-grid/semantic-input.md` を参照する。
 
 ## 見直し条件
 
@@ -102,8 +102,8 @@ MVPでの解音の定め方（格子中央への固定か、訪問者による�
 
 ## 参照
 
-- `requirements/intent/music-semantic-structure.md:193-201`（静的な和音とベースの要求の参照元）
-- `requirements/intent/shasavistic-music-world.md:62,68`（静的な和音と非目標の要求の参照元）
+- `requirements/intent/music-semantic-structure.md:193-200`（静的な和音とベースの要求の参照元）
+- `requirements/intent/shasavistic-music-world.md:63,68`（静的な和音と非目標の要求の参照元）
 - `requirements/reference/relative-pitch-space.md`（次元番号と素数軸の対応と移動の定義の参照元）
 - `shasavistic-music-lab/src/audio/harmonicRatio.ts`（約分と声解決の参照先）
 - `shasavistic-music-lab/src/audio/harmonicChord.ts`（発音口と上限の参照先）

@@ -8,14 +8,14 @@
 
 - 親は `workflow/design/shasavistic-music-lab.md` とする
 - 格子のオン操作から `SemanticChord` を組み立てる上半分、音色分離、時間・メロディー、遠隔同期、ホスト・物理出力は対象外とする
-- 音域配置は今回は行わない。`resolveSemanticChord` の解決済み周波数をそのまま鳴らす。MVP の音域・間隔要求（`requirements/intent/shasavistic-music-world.md:48-49`、220–1760Hz）への適合は、この下位経路だけでは未達である
+- 音域配置は今回は行わない。`resolveSemanticChord` の解決済み周波数をそのまま鳴らす。下半分単独ではMVPの音域・間隔要求（`requirements/intent/shasavistic-music-world.md:48-49`、220–1760Hz）への適合は未達である。上半分との接続後の到達点は `pitch-grid/semantic-input.md` を参照する（ベースなしで既存配置の `k` を正しく伝達すれば保持しうるが、下半分単独は未達、ベース込みは未確定のためMVP全体では未達。実装・計測前なので達成済みとしない）
 
 ## 要求元
 
 `workflow/design/shasavistic-music-lab/semantic-chord.md`（型と解決の正本）と `workflow/design/shasavistic-music-lab/pitch-grid/live-audio.md`（発音口の反映契約）を要求元とする。要求を再定義しない。
 
-- `requirements/intent/music-semantic-structure.md:198,201` のベースの役割と解音の要具体化
-- `requirements/intent/shasavistic-music-world.md:64` のベースと 15 点の要具体化
+- `requirements/intent/music-semantic-structure.md:198,200` のベースの役割と解音の固定
+- `requirements/intent/shasavistic-music-world.md:64` のベースと 15 点（確定済み。上限内で扱う）
 
 ## 確定した方式
 
@@ -23,7 +23,7 @@
 
 呼び出し側が `SemanticChord` と解音周波数を供給し、`resolveSemanticChord`、純粋な声仕様変換、session を経て `PitchGridSound` へ届ける。
 
-- session は発音口を専有する。既存 `pitchGridController` とは別経路とし、同じ発音口へ二重に反映しない。所有は一つにする。格子経路と意味論経路が同時に鳴りうることへの調停は今回の対象外であり、上半分の設計で決める
+- session は発音口を専有する。既存 `pitchGridController` とは別経路とし、同じ発音口へ二重に反映しない。所有は一つにする。格子経路と意味論経路が同時に鳴りうることへの調停は今回の対象外であり、上半分の設計（`pitch-grid/semantic-input.md`）で決める
 
 ### 純粋変換
 
@@ -46,15 +46,15 @@
 - 反映は `resolveSemanticChord`、純粋変換、検査（仕様数が上限を超えていないかの検査）を経て発音口の生成・更新へ進む。同一次元は `setVoices`、次元が変わった反映は `switchDimension` とする（停止と反映の重ね呼びで代用しない）。次元変更の判定のため、直近の主要次元を保持する
 - 声数上限は、仕様数が `PITCH_GRID_MAX_VOICES`（15）を超える場合は `RangeError` とし、新しい反映を行わず、既存の声を勝手に止めない。ベースも声数に数える。定数は `PITCH_GRID_MAX_VOICES` を参照し、15 を再定義しない
 - 解決・変換・検査を終えてから発音口を生成・更新する。解音不正・上限超過・発音失敗は呼び出し側へ返し、握り潰さない
-- 常設診断口を作らない。表示用快照・共有状態・通知機構は今回追加しない。`stop()` は発音口の全声停止、`dispose()` は発音口を一度だけ破棄する
+- 常設診断口を作らない。ピアノ表示のため session に限定した読取り快照・変更通知（`soundingVoices`／`subscribeSounding` の中継）を追加する。共有状態・通知機構は追加しない。`stop()` は発音口の全声停止、`dispose()` は発音口を一度だけ破棄する
 
 ## 採用しない案
 
 - `pitchGridController` に意味論入力を継ぎ足す案。責務混在と所有の二重化を招くため
 - 音ごとの単純折返しで音域を合わせる案。集合の最短間隔優先を保証せず、別の正本になるため。今回は折返し自体を行わない
 - 上限超過の打ち切り・声の奪取・別経路への自動切替。黙って落とすと意味論の欠落を隠すため
-- `PITCH_GRID_BASE_FREQUENCY_HZ` を解音の既定に流用する案。未確定の中央固定を暗黙採用するため
-- 既存の配置（`assignPitchGridFrequencies` の動的計画法）を今回抽出・共通化する案。配置が要求された段階で別途行うため
+- `PITCH_GRID_BASE_FREQUENCY_HZ` を解音の既定に流用する案。解音周波数は上位が明示して渡すため、既定値による暗黙の供給を置かないため
+- 既存の配置（`assignPitchGridFrequencies` の動的計画法）を今回抽出・共通化する案。配置が要求された段階で別途行うため（上半分での既存APIへの結果情報追加と直接利用は抽出ではない）
 - `harmonicChord` の流用
 
 ## 未確定の候補
@@ -63,7 +63,6 @@
 
 - 明示オクターブ位置を発音時に再配置してよいか、ベースへの音域・最低音条件、同音ベースの配置後の関係（MVP の音域・間隔適合）
 - ベースと格子のオン点・最大 15 点との体験上の関係
-- MVP での解音の選択と供給元
 - 格子のオン操作から `SemanticChord` を組み立てる上半分、遠隔同期、ホスト・物理出力
 
 ## 見直し条件
@@ -91,9 +90,9 @@
 
 - `workflow/design/shasavistic-music-lab/semantic-chord.md`（型と解決の正本の参照元）
 - `workflow/design/shasavistic-music-lab/pitch-grid/live-audio.md`（発音口の反映契約の参照元）
-- `workflow/design/shasavistic-music-lab/pitch-grid/pitch-assignment.md`（今回は改訂しない配置の参照先）
-- `requirements/intent/music-semantic-structure.md:193-201`（静的な和音とベースの要求の参照元）
-- `requirements/intent/shasavistic-music-world.md:44-72`（MVP の音域・間隔とベースの要具体化の参照元）
+- `workflow/design/shasavistic-music-lab/pitch-grid/pitch-assignment.md`（配置結果の正本の参照先）
+- `requirements/intent/music-semantic-structure.md:193-200`（静的な和音とベースの要求の参照元）
+- `requirements/intent/shasavistic-music-world.md:48-49,63-64`（`:48-49` は音域・間隔の要求、`:63-64` は静的な和音とベースの要求の参照元）
 - `shasavistic-music-lab/src/audio/semanticChord.ts`（型と解決の参照先）
 - `shasavistic-music-lab/src/audio/pitchGridSound.ts`（発音口と声仕様・上限の参照先）
 - `shasavistic-music-lab/src/audio/pitchGridController.ts`（別経路とする制御器の参照先）
